@@ -1,4 +1,5 @@
 const path = require('node:path');
+const fs = require('node:fs/promises');
 
 function resolveWorkspacePath(workspace, candidate) {
   const root = path.resolve(workspace);
@@ -22,12 +23,12 @@ async function assertNoSymlinkPath(workspace, targetPath) {
     throw new Error('That path is outside the selected workspace.');
   }
   let current = root;
-  const rootStat = await require('node:fs/promises').lstat(root);
+  const rootStat = await fs.lstat(root);
   if (rootStat.isSymbolicLink()) throw new Error('The selected workspace cannot be a symbolic link.');
   for (const segment of relative.split(path.sep).filter(Boolean)) {
     current = path.join(current, segment);
     try {
-      const stat = await require('node:fs/promises').lstat(current);
+      const stat = await fs.lstat(current);
       if (stat.isSymbolicLink()) throw new Error('Symbolic links are not followed inside the workspace.');
     } catch (error) {
       if (error.code === 'ENOENT') break;
@@ -37,20 +38,22 @@ async function assertNoSymlinkPath(workspace, targetPath) {
   return target;
 }
 
+// Directories whose contents must never reach an agent, either as context or
+// as an approved write target (VCS internals and credential stores).
+const SENSITIVE_DIRECTORIES = new Set(['.git', '.ssh', '.gnupg', '.aws', '.kube', '.docker']);
+const SENSITIVE_FILE_NAMES = ['.env', '.npmrc', '.netrc', '_netrc', '.htpasswd', '.pypirc', '.terraformrc', '.tfrc', '.pgpass', '.dockercfg', 'id_rsa', 'id_ed25519'];
+const SENSITIVE_EXTENSIONS = ['.pem', '.key', '.pfx', '.p12', '.jks', '.keystore'];
+
 function isSensitivePath(candidate) {
   const normalized = String(candidate).replaceAll('\\', '/').toLowerCase();
-  const segments = normalized.split('/');
+  const segments = normalized.split('/').filter(segment => segment && segment !== '.');
   const base = segments.at(-1) || '';
-  const parent = segments.at(-2) || '';
-  const exactNames = ['.env', 'id_rsa', 'id_ed25519', '.npmrc', '.netrc', '_netrc', '.htpasswd'];
-  const extensions = ['.pem', '.key', '.pfx', '.p12', '.jks', '.keystore'];
-  return exactNames.includes(base)
+  if (segments.some(segment => SENSITIVE_DIRECTORIES.has(segment))) return true;
+  return SENSITIVE_FILE_NAMES.includes(base)
     || base.startsWith('.env.')
-    || extensions.some(extension => base.endsWith(extension))
-    || (base.includes('secret'))
-    || base.includes('credential')
-    || (['.aws', '.kube'].includes(parent) && base === 'config')
-    || (parent === '.docker' && (base === 'config' || base === 'config.json'));
+    || SENSITIVE_EXTENSIONS.some(extension => base.endsWith(extension))
+    || base.includes('secret')
+    || base.includes('credential');
 }
 
 // Shell commands a human should confirm with extra care before they allow them.
@@ -74,6 +77,11 @@ function assessShellRisk(command) {
 function redactForLog(value) {
   return String(value)
     .replace(/(sk-[A-Za-z0-9_-]{12,})/g, '[redacted]')
+    .replace(/\b(gh[pousr]_[A-Za-z0-9]{20,})\b/g, '[redacted]')
+    .replace(/\b(github_pat_[A-Za-z0-9_]{20,})\b/g, '[redacted]')
+    .replace(/\b(AKIA[0-9A-Z]{16})\b/g, '[redacted]')
+    .replace(/\b(AIza[0-9A-Za-z_-]{35,})\b/g, '[redacted]')
+    .replace(/\b(xox[baprs]-[A-Za-z0-9-]{10,})\b/g, '[redacted]')
     .replace(/(x-api-key\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]')
     .replace(/(Bearer\s+)[A-Za-z0-9._~-]+/gi, '$1[redacted]');
 }

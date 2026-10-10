@@ -69,6 +69,20 @@ test('a git_diff of a secret file is blocked, reported to the agent, and the run
   assert.equal(execCalls.some(call => call.args.includes('.env')), false, 'git is never asked to diff the secret file');
 });
 
+test('reading VCS internals is blocked instead of leaking credentials to the model', async t => {
+  const { ipcHandlers, modelReplies } = await readyHarness(t);
+  const plan = await ipcHandlers.get('task:plan')(null, { prompt: 'Review the project for issues.', provider: 'openai', model: 'model-x' });
+  modelReplies.push(
+    '{"type":"tool","name":"read_file","arguments":{"path":".git/config"}}',
+    '{"type":"final","content":"Reviewed the safe files."}'
+  );
+  await ipcHandlers.get('task:approve-route')(null, plan.id);
+  const done = await waitForStatus(ipcHandlers, plan.id, 'completed');
+  const toolError = done.events.find(item => item.type === 'tool-error' && item.tool === 'read_file');
+  assert.ok(toolError, 'reading .git internals is reported as a recoverable tool error');
+  assert.match(toolError.message, /secret/i);
+});
+
 test('a coordination tool error is fed back to the agent instead of failing the task', async t => {
   const { ipcHandlers, events, modelReplies } = await readyHarness(t);
   const plan = await ipcHandlers.get('task:plan')(null, { prompt: 'Build the new feature.', provider: 'openai', model: 'model-x' });

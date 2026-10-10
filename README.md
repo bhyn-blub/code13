@@ -48,7 +48,8 @@ The portable app folder is written to `release/win-unpacked`. To create an NSIS 
 
 ## Safety behavior and current limits
 
-- Common `.env`, private-key, and credential-named files (including `.npmrc`, `.pfx`/`.p12`/`.jks` keystores, `.netrc`, and `~/.aws`, `~/.docker`, `~/.kube` config files) cannot be sent to an agent or changed by an agent.
+- Common `.env`, private-key, and credential-named files (including `.npmrc`, `.pypirc`, `.terraformrc`, `.pgpass`, `.pfx`/`.p12`/`.jks` keystores, `.netrc`, and `~/.aws`, `~/.docker`, `~/.kube` config files) cannot be sent to an agent or changed by an agent.
+- VCS and credential-store internals (`.git/`, `.ssh/`, `.gnupg/`, `.aws/`, `.kube/`, `.docker/`) are blocked for both reads and writes, so an agent cannot exfiltrate a token from `.git/config` or plant a `.git/hooks/*` script.
 - `git_diff` applies the same secret policy: a diff of a named secret file is refused, and a whole-tree diff first lists changed files and excludes any secret paths before asking Git for content.
 - Workspace traversal and symbolic-link paths are blocked. File browsing skips dependency and build folders.
 - `run_shell` is a real boundary, not a sandbox: an approved command runs in the project folder as your user. Code 13 warns before obviously destructive commands and always requires approval, but it cannot undo what you approve.
@@ -74,4 +75,4 @@ npm run format    # Prettier (opt-in; the shipped files use a compact style)
 npm test
 ```
 
-The test suite covers provider streams and errors, FreeLLM routing, route/privacy behavior, workspace path checks, approved file writes and shell commands, restart-persistent approvals, Builder/Reviewer sequencing, ticket creation, agent handoffs, the Ask-me round trip, the circuit breaker, restart-persistent questions, model-output parsing, secret-file policy (including `git_diff` filtering), recoverable tool errors, cancelling a task that is awaiting approval, shell-risk assessment, scheduled read-only permissions, and the extracted Git/shell/workspace tool modules.
+The test suite covers provider streams and errors, FreeLLM routing, route/privacy behavior, workspace path checks, approved file writes and shell commands, restart-persistent approvals, Builder/Reviewer sequencing, ticket creation, agent handoffs, the Ask-me round trip, the circuit breaker, restart-persistent questions, model-output parsing, secret-file and VCS-internal policy (including `git_diff` filtering and token redaction), recoverable tool errors, cancelling a task that is awaiting approval, shell-risk assessment, scheduled read-only permissions, and the extracted Git/shell/workspace tool modules.

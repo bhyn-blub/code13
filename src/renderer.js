@@ -174,7 +174,7 @@ async function routeAction(event) {
 
 function handleEvent(event) {
   if (event.taskId && state.currentTask && event.taskId !== state.currentTask.id) {
-    if (['schedule-started', 'approval-requested', 'error', 'final', 'tool-result', 'resume-required'].includes(event.type)) { state.activity.unshift(event); renderActivity(); }
+    if (['schedule-started', 'approval-requested', 'error', 'final', 'tool-result', 'tool-error', 'resume-required'].includes(event.type)) { state.activity.unshift(event); renderActivity(); }
     if (event.type === 'task-status') { const task = state.tasks.find(item => item.id === event.taskId); if (task) task.status = event.status; }
     renderRecentTasks(); return;
   }
@@ -191,6 +191,7 @@ function handleEvent(event) {
   if (event.type === 'budget-paused') { appendMessage('assistant', `Paused: this task used its model-call budget (${event.modelCalls}/${event.budget}) before finishing. Raise the budget in Settings and start a new task to continue.`); $('#typingIndicator').classList.add('hidden'); }
   if (event.type === 'handoff') { const from = state.agents.find(agent => agent.id === event.agentId)?.name || event.agentId; const to = state.agents.find(agent => agent.id === event.toAgentId)?.name || event.toAgentId; appendMessage('assistant', `${from} handed over ${event.ticketCode} to ${to}.${event.note ? ` ${event.note}` : ''}`); }
   if (event.type === 'tool-result') appendMessage('assistant', `${event.workerId ? state.agents.find(agent => agent.id === event.workerId)?.name || 'Agent' : 'Agent'} · ${event.tool}\n${event.result}`);
+  if (event.type === 'tool-error') appendMessage('assistant', `${event.name || 'Agent'} · ${event.tool}\nTool error: ${event.message}`);
   if (event.type === 'final') { appendMessage('assistant', event.content); $('#typingIndicator').classList.add('hidden'); }
   if (event.type === 'error') { appendMessage('assistant', `The run stopped: ${event.message}`); $('#typingIndicator').classList.add('hidden'); }
   if (event.type === 'resume-required') appendMessage('assistant', event.message);

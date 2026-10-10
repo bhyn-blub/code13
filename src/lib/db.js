@@ -20,9 +20,6 @@ function openDatabase({ databasePath, presets = [], defaultProviders = {}, defau
     CREATE INDEX IF NOT EXISTS idx_tickets_task ON tickets(task_id, created_at);
   `);
   const stamp = new Date().toISOString();
-  if (!db.prepare("SELECT value FROM settings WHERE key = 'schema_version'").get()) {
-    db.prepare("INSERT INTO settings(key,value) VALUES('schema_version','1')").run();
-  }
   const approvalColumns = db.prepare('PRAGMA table_info(approvals)').all().map(row => row.name);
   if (!approvalColumns.includes('response_text')) db.exec('ALTER TABLE approvals ADD COLUMN response_text TEXT');
   if (!db.prepare("SELECT value FROM settings WHERE key='task_budget'").get()) {
