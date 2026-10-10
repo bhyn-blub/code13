@@ -1,0 +1,51 @@
+{
+  "name": "code13-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first desktop AI agent workspace",
+  "main": "src/main.js",
+  "author": "Code 13",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test \"test/**/*.test.js\"",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "pack:win": "electron-builder --win dir",
+    "dist:win": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "electron": "^41.0.0",
+    "electron-builder": "^26.0.12",
+    "eslint": "^9.39.5",
+    "globals": "^15.15.0",
+    "prettier": "^3.9.10"
+  },
+  "build": {
+    "appId": "com.code13.desktop",
+    "productName": "Code 13",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "Code13-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "electronDist": "node_modules/electron/dist"
+  }
+}

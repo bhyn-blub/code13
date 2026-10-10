@@ -1,0 +1,10 @@
+node_modules
+release
+outputs
+dist
+package-lock.json
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+src/styles.css
+src/index.html

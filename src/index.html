@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src https://api.openai.com https://api.anthropic.com http://localhost:* http://127.0.0.1:*;">
+  <title>Code 13</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand-row"><div class="brand-mark">13</div><div><div class="brand-name">Code <span>13</span></div><div class="brand-sub">LOCAL AGENT WORKSPACE</div></div></div>
+      <button id="newTaskButton" class="new-task"><span>＋</span> New task <kbd>Ctrl K</kbd></button>
+      <div class="sidebar-label">WORKSPACE</div>
+      <div class="workspace-side"><div class="folder-icon">▧</div><div class="workspace-meta"><strong id="sidebarWorkspace">No project selected</strong><small>Active project</small></div><button id="chooseWorkspaceSmall" class="icon-button" title="Choose project">⌕</button></div>
+      <div class="sidebar-label task-label">RECENT TASKS <span id="taskCount">0</span></div>
+      <div id="recentTasks" class="recent-tasks"></div>
+      <div class="sidebar-spacer"></div>
+      <button class="sidebar-link" data-open="team"><span>♙</span> Agents <span id="agentCount" class="side-count">3</span></button>
+      <button class="sidebar-link" data-open="settings"><span>⚙</span> Settings</button>
+      <div class="sidebar-footer"><span class="local-dot"></span><span>Orchestration stays on this device</span></div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <div class="breadcrumbs"><span>Workspace</span><i>/</i><strong id="topWorkspace">Choose a project</strong></div>
+        <div class="top-actions"><div class="provider-pill"><span class="provider-dot" id="providerDot"></span><span id="providerStatus">Ollama · local</span></div><button class="top-icon" id="openSettings" title="Provider settings">⚙</button><div class="avatar">13</div></div>
+      </header>
+
+      <section class="content-grid">
+        <div class="conversation-column">
+          <div id="conversationHeader" class="conversation-header"><div class="eyebrow"><span class="spark">✳</span> YOUR DESKTOP AI TEAM</div><h1>What are we working on?</h1><p>Describe an outcome. Code 13 will propose the right agents and tools.</p></div>
+          <div id="messages" class="messages"></div>
+          <div id="emptyState" class="empty-state">
+            <div class="suggestion-grid">
+              <button class="suggestion" data-prompt="Investigate this project and suggest the next three improvements."><span class="suggestion-icon violet">⌕</span><strong>Explore a project</strong><small>Find the important parts and map what to do next</small></button>
+              <button class="suggestion" data-prompt="Find why the tests are failing, fix the cause, and summarize the changes."><span class="suggestion-icon coral">⌁</span><strong>Fix a problem</strong><small>Investigate, make a focused change, and verify it</small></button>
+              <button class="suggestion" data-prompt="Review the current project for bugs and security issues. Report findings with file references."><span class="suggestion-icon mint">✓</span><strong>Review the code</strong><small>Ask a reviewer agent to inspect your project</small></button>
+              <button class="suggestion" data-prompt="Run the project's existing test suite and explain any failures."><span class="suggestion-icon blue">▶</span><strong>Run verification</strong><small>Inspect project scripts and check the current state</small></button>
+            </div>
+          </div>
+          <div id="routePanel" class="route-panel hidden"></div>
+          <div id="approvalPanel" class="approval-stack"></div>
+          <div id="typingIndicator" class="typing hidden"><span class="typing-dots"><i></i><i></i><i></i></span><span>Code 13 is coordinating the team…</span></div>
+          <form id="composer" class="composer-wrap">
+            <div class="composer-box"><textarea id="promptInput" rows="2" placeholder="Ask Code 13 to work on your project…"></textarea><button id="sendButton" type="submit" class="send-button" aria-label="Send request">↑</button></div>
+            <div class="composer-footer"><div class="composer-context"><span class="context-dot"></span><span id="composerWorkspace">Choose a workspace to start</span><span class="footer-divider"></span><span id="egressHint">Provider context stays local with Ollama</span></div><div class="composer-controls"><label class="provider-select-wrap"><span>ROUTE WITH</span><select id="routeProvider"><option value="ollama">Ollama · local</option><option value="openai">OpenAI API</option><option value="anthropic">Anthropic API</option><option value="freellm">FreeLLM · local router</option></select></label><button type="button" id="attachFolder" class="attach-button" title="Choose workspace">▧</button></div></div>
+          </form>
+          <div class="composer-note">Code 13 asks before applying file changes or running shell commands.</div>
+        </div>
+
+        <aside class="team-column">
+          <div class="team-header"><div><div class="team-kicker">YOUR CREW <span class="live-indicator"><i></i> LIVE</span></div><h2>Agent team</h2></div><button id="addAgent" class="add-agent" title="Add agent">＋</button></div>
+          <div id="teamCards" class="team-cards"></div>
+          <div class="team-footer"><button id="manageAgents" class="manage-team">Manage agent team <span>↗</span></button></div>
+          <div class="ticket-board"><div class="ticket-heading"><span class="activity-pulse"></span><strong>Ticket board</strong><span class="ticket-count" id="ticketCount">0</span></div><div id="ticketList" class="ticket-list"><div class="ticket-empty">Agents plan their work as tickets after a route is approved.</div></div></div>
+          <div class="activity-card"><div class="activity-heading"><span class="activity-pulse"></span><strong>Activity</strong><button id="clearActivity" title="Clear visible activity">···</button></div><div id="activityList" class="activity-list"><div class="activity-empty">Your team’s activity will appear here.</div></div></div>
+          <div class="local-callout"><div class="lock-icon">⌑</div><div><strong>Your work stays yours</strong><p>Project files and orchestration stay on this device. Hosted model requests are labeled before you approve a route.</p></div></div>
+        </aside>
+      </section>
+    </main>
+  </div>
+
+  <div id="overlay" class="overlay hidden">
+    <section id="settingsModal" class="modal hidden"><div class="modal-header"><div><div class="modal-kicker">CONFIGURATION</div><h2>Settings</h2><p>Connect model providers and choose a project workspace.</p></div><button class="close-modal" data-close>×</button></div>
+      <div class="modal-tabs"><button class="active" data-tab="providers">Providers</button><button data-tab="workspace">Workspace</button><button data-tab="privacy">Privacy</button></div>
+      <div class="modal-body" id="settingsBody"></div><div class="modal-footer"><span id="settingsMessage" class="inline-message"></span><button class="secondary-button" data-close>Cancel</button><button id="saveSettings" class="primary-button">Save settings</button></div>
+    </section>
+    <section id="teamModal" class="modal hidden"><div class="modal-header"><div><div class="modal-kicker">YOUR SPECIALISTS</div><h2>Manage agent team</h2><p>Give agents their own role, model, tools, notes, and schedule.</p></div><button class="close-modal" data-close>×</button></div><div class="agent-manager" id="agentManager"></div><div class="modal-footer"><span class="inline-message">Schedules run read-only checks automatically. Changes and commands wait for approval.</span><button class="secondary-button" data-close>Done</button></div></section>
+    <section id="agentModal" class="modal agent-edit-modal hidden"><div class="modal-header"><div><div class="modal-kicker">AGENT CONFIGURATION</div><h2 id="agentModalTitle">New specialist</h2><p>Configure this worker’s role and access.</p></div><button class="close-modal" data-close>×</button></div><div id="agentEditor" class="agent-editor"></div><div class="modal-footer"><span id="agentMessage" class="inline-message"></span><button class="secondary-button" data-close>Cancel</button><button id="saveAgent" class="primary-button">Save agent</button></div></section>
+  </div>
+  <div id="toast" class="toast hidden"></div>
+  <script src="renderer.js"></script>
+</body>
+</html>
