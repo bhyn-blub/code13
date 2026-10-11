@@ -41,6 +41,7 @@ function init() {
   $('#routeModelRefresh').addEventListener('click', async () => { await ensureModels(activeProvider(), true); updateProviderChrome(); });
   $('#sessionSelect').addEventListener('change', switchSession);
   $('#newSessionButton').addEventListener('click', createNewSession);
+  initFileAutocomplete();
   document.addEventListener('click', event => {
     const close = event.target.closest('[data-close]');
     if (close) closeModals();
@@ -392,6 +393,59 @@ async function createNewSession() {
     renderSessions(); renderRecentTasks();
     toast('New session started.');
   } catch (error) { toast(error.message); }
+}
+function initFileAutocomplete() {
+  const input = $('#promptInput');
+  const suggestions = $('#suggestions');
+  if (!input || !suggestions) return;
+  let active = 0;
+  let items = [];
+  let last = '';
+  input.addEventListener('input', debounce(async () => {
+    const value = input.value;
+    const cursor = input.selectionStart || 0;
+    const before = value.slice(0, cursor);
+    const match = before.match(/@([^\s,;(){}[\]"'`]*)$/);
+    if (!match || match[1].length === 0) {
+      suggestions.classList.add('hidden');
+      return;
+    }
+    const token = match[1].toLowerCase();
+    if (last === token && items.length > 0) return;
+    last = token;
+    try {
+      const files = await window.code13.listWorkspaceFiles('.');
+      items = files.filter(f => f.toLowerCase().includes(token)).slice(0, 10);
+      renderSuggestions(items, 0);
+    } catch {
+      suggestions.classList.add('hidden');
+    }
+  }, 150));
+  input.addEventListener('keydown', (e) => {
+    if (suggestions.classList.contains('hidden')) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); active = Math.min(active + 1, items.length - 1); renderSuggestions(items, active); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(active - 1, 0); renderSuggestions(items, active); }
+    else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); applySuggestion(items[active]); }
+    else if (e.key === 'Escape') { suggestions.classList.add('hidden'); }
+  });
+  suggestions.addEventListener('click', (e) => {
+    const item = e.target.closest('.suggestion-item');
+    if (item) applySuggestion(item.dataset.path);
+  });
+  function renderSuggestions(list, idx) {
+    active = idx;
+    suggestions.innerHTML = list.map((p, i) => `<div class="suggestion-item ${i===idx?'active':''}" data-path="${esc(p)}">${esc(p)}</div>`).join('');
+    suggestions.classList.toggle('hidden', list.length === 0);
+  }
+  function applySuggestion(path) {
+    const cursor = input.selectionStart || 0;
+    const before = input.value.slice(0, cursor);
+    const after = input.value.slice(cursor);
+    input.value = before.replace(/@[^\s,;(){}[\]"'`]*$/, '@' + path + ' ') + after;
+    suggestions.classList.add('hidden');
+    input.focus();
+    input.selectionStart = input.selectionEnd = before.replace(/@[^\s,;(){}[\]"'`]*$/, '@' + path + ' ').length;
+  }
 }
 function renderRecentTasks() {
   const tasks = [...state.tasks];

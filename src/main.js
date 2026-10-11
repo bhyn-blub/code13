@@ -210,6 +210,33 @@ function activeSessionId() {
 function sessionTasks(sessionId) {
   return db.prepare('SELECT id,title,status,mode,created_at AS createdAt FROM tasks WHERE session_id=? ORDER BY created_at DESC LIMIT 20').all(sessionId);
 }
+
+async function expandAtFileReferences(workspace, text) {
+  const pattern = /@([^\s/][^\s,;(){}[\]"'`]*|[^\s][^\s]*\/[^\s,;(){}[\]"'`]*)/g;
+  let result = text;
+  let match;
+  const seen = new Set();
+  while ((match = pattern.exec(text)) !== null) {
+    const rel = match[1];
+    if (!rel || rel.startsWith('.') || rel.includes('..')) continue;
+    const key = rel.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      const filePath = resolveWorkspacePath(workspace, rel);
+      if (isSensitivePath(rel)) continue;
+      await assertNoSymlinkPath(workspace, filePath);
+      const stat = await fs.stat(filePath);
+      if (!stat.isFile()) continue;
+      if (stat.size > 500000) continue;
+      const content = (await fs.readFile(filePath, 'utf8')).slice(0, 16000);
+      result = result.replace(new RegExp(`@${escapeRegExp(rel)}(?![^\s,;(){}[\]"'\`])`, 'g'), `### @${rel}\n\`\`\`${getCodeFence(content)}\n${content}\n\`\`\``);
+    } catch { /* ignore missing/unreadable files */ }
+  }
+  return result;
+}
+function escapeRegExp(value) { return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function getCodeFence(content) { return content.includes('```') ? 'text' : ''; }
 function emitEvent(message) {
   for (const browser of BrowserWindow.getAllWindows()) browser.webContents.send('code13:event', message);
   return message;
@@ -345,6 +372,14 @@ ipcMain.handle('provider:test', async (_event, provider) => ({ provider, models:
 ipcMain.handle('provider:models', async (_event, provider, force) => await getModelsCached(provider, !!force));
 ipcMain.handle('provider:ping', async (_event, provider) => ({ provider, ...(await ping(provider)) }));
 
+ipcMain.handle('workspace:list-files', async (_event, relativePath = '.') => {
+  const workspace = getSetting('workspace');
+  if (!workspace || !existsSync(workspace)) throw new Error('Choose a project folder first.');
+  const target = relativePath && relativePath !== '.' ? resolveWorkspacePath(workspace, relativePath) : workspace;
+  await assertNoSymlinkPath(workspace, target);
+  return await listWorkspaceFiles(workspace, relativePath);
+});
+
 ipcMain.handle('agent:save', (_event, agent) => {
   const oldAgent = getAgents().find(item => item.id === agent.id);
   const scheduleEnabled = !!agent.schedule?.enabled;
@@ -380,6 +415,7 @@ ipcMain.handle('task:plan', async (_event, request) => {
   const workspace = getSetting('workspace');
   if (!prompt) throw new Error('Describe what you want Code 13 to do.');
   if (!workspace || !existsSync(workspace)) throw new Error('Choose a project folder before starting a task.');
+  const expandedPrompt = await expandAtFileReferences(workspace, prompt);
   const providers = getProviders();
   const provider = PROVIDERS.includes(request.provider) ? request.provider : 'ollama';
   const model = await resolveModel(provider, request.model, providers);
@@ -391,7 +427,7 @@ ipcMain.handle('task:plan', async (_event, request) => {
   db.prepare('INSERT INTO tasks(id,title,status,mode,session_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?)').run(id, title, 'planning', 'manual', sessionId, now(), now());
   const session = db.prepare('SELECT title FROM sessions WHERE id=?').get(sessionId);
   touchSession(sessionId, !session || session.title === 'New session' ? title.slice(0, 60) : null);
-  saveMessage(id, 'user', prompt);
+  saveMessage(id, 'user', expandedPrompt);
   const context = { workspace, provider, model, providers: { [provider]: providers[provider] }, agents: agents.map(({ id: agentId, name, description, tools: allowedTools, provider: agentProvider, model: agentModel }) => ({ id: agentId, name, description, tools: allowedTools, provider: agentProvider === 'inherit' ? provider : agentProvider, model: agentModel || (agentProvider === 'inherit' ? model : providers[agentProvider]?.model || '') })) };
   let chosenIds;
   let rationale = 'The local router matched the request to the closest enabled roles.';
@@ -404,7 +440,7 @@ ipcMain.handle('task:plan', async (_event, request) => {
     try {
       const text = await callModel(provider, [
         { role: 'system', content: 'You route desktop coding tasks. Return only JSON: {"agents":[agent ids],"reason":"short explanation","steps":["short task step"]}. Pick one to three listed agents. Never invent ids or request tools.' },
-        { role: 'user', content: JSON.stringify({ task: prompt, workspaceName: path.basename(workspace), agents: context.agents }) }
+        { role: 'user', content: JSON.stringify({ task: expandedPrompt, workspaceName: path.basename(workspace), agents: context.agents }) }
       ]);
       const route = parseJson(text);
       const allowed = new Set(agents.map(agent => agent.id));
@@ -437,7 +473,7 @@ ipcMain.handle('task:plan', async (_event, request) => {
     throw new Error(`Choose a model for ${missingModel.name} (${missingProvider}) in Settings before starting.`);
   }
   destination = destinationForProviders(plannedProviders);
-  const plan = { id, title, prompt, workspace, provider: routedProvider, model: routedModel, destination, reason: rationale, steps: selected.map(agent => { const agentProvider = agent.provider === 'inherit' ? routedProvider : agent.provider; return { agentId: agent.id, name: agent.name, provider: agentProvider, model: agent.model || (agent.provider === 'inherit' ? routedModel : providers[agentProvider]?.model || ''), tools: agent.tools }; }) };
+  const plan = { id, title, prompt: expandedPrompt, workspace, provider: routedProvider, model: routedModel, destination, reason: rationale, steps: selected.map(agent => { const agentProvider = agent.provider === 'inherit' ? routedProvider : agent.provider; return { agentId: agent.id, name: agent.name, provider: agentProvider, model: agent.model || (agent.provider === 'inherit' ? routedModel : providers[agentProvider]?.model || ''), tools: agent.tools }; }) };
   db.prepare('UPDATE tasks SET status=? WHERE id=?').run('awaiting-route-approval', id);
   pushEvent(id, 'route-proposed', plan);
   return plan;

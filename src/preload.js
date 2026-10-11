@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('code13', {
   testProvider: (provider) => ipcRenderer.invoke('provider:test', provider),
   pingProvider: (provider) => ipcRenderer.invoke('provider:ping', provider),
   listProviderModels: (provider, force) => ipcRenderer.invoke('provider:models', provider, force),
+  listWorkspaceFiles: (relativePath) => ipcRenderer.invoke('workspace:list-files', relativePath),
   saveAgent: (agent) => ipcRenderer.invoke('agent:save', agent),
   deleteAgent: (id) => ipcRenderer.invoke('agent:delete', id),
   setSchedule: (id, schedule) => ipcRenderer.invoke('agent:schedule', id, schedule),
