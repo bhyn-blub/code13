@@ -229,3 +229,73 @@ test('FreeLLM drives a full task to completion through the local router', async 
   assert.equal(done.status, 'completed');
   assert.ok(done.messages.some(message => String(message.content).includes('Routed through FreeLLM.')), 'the router answer reaches the conversation');
 });
+
+// A fetch fake that answers `/models` with a configurable list and streams a
+// chat completion otherwise, so Phase A's model auto-resolution can be tested.
+function routerFetch(info = {}) {
+  const calls = { modelFetches: 0 };
+  const impl = async url => {
+    if (String(url).includes('/models')) {
+      calls.modelFetches++;
+      const list = info.modelList || ['alpha', 'beta'];
+      return new Response(JSON.stringify({ data: list.map(id => ({ id })) }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    const content = '{"type":"final","content":"Done."}';
+    const stream = new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\ndata: [DONE]\n\n`)); controller.close(); } });
+    return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+  };
+  return { impl, calls };
+}
+
+test('task:plan falls back to the provider default model when the request omits one', async t => {
+  const { ipcHandlers } = await readyHarness(t);
+  const plan = await ipcHandlers.get('task:plan')(null, { prompt: 'Build the new feature.', provider: 'openai' });
+  assert.equal(plan.steps[0].model, 'model-x', 'the configured provider model is used');
+});
+
+test('task:plan auto-selects the first model a router offers', async t => {
+  const router = routerFetch({ modelList: ['zeta', 'alpha'] });
+  const harness = await createHarness(t, { fetchImpl: router.impl });
+  const first = harness.boot();
+  await sleep(50);
+  await first.ipcHandlers.get('workspace:select')();
+  await first.ipcHandlers.get('settings:save')(null, { providers: { freellm: { baseUrl: 'http://localhost:3001/v1', model: '', apiKey: 'freellm-unified-key' } } });
+  const plan = await first.ipcHandlers.get('task:plan')(null, { prompt: 'Build the new feature.', provider: 'freellm' });
+  assert.equal(plan.steps[0].provider, 'freellm');
+  assert.equal(plan.steps[0].model, 'alpha', 'the sorted model list yields a usable model');
+});
+
+test('task:plan falls back to FreeLLM "auto" when the router is unreachable', async t => {
+  const refused = async () => { throw Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }); };
+  const harness = await createHarness(t, { fetchImpl: refused });
+  const first = harness.boot();
+  await sleep(50);
+  await first.ipcHandlers.get('workspace:select')();
+  await first.ipcHandlers.get('settings:save')(null, { providers: { freellm: { baseUrl: 'http://localhost:3001/v1', model: '', apiKey: 'freellm-unified-key' } } });
+  const plan = await first.ipcHandlers.get('task:plan')(null, { prompt: 'Build the new feature.', provider: 'freellm' });
+  assert.equal(plan.steps[0].model, 'auto', 'an empty model never blocks task creation');
+});
+
+test('provider:models caches a router list and reloads when forced', async t => {
+  const router = routerFetch({ modelList: ['alpha'] });
+  const harness = await createHarness(t, { fetchImpl: router.impl });
+  const first = harness.boot();
+  await sleep(50);
+  await first.ipcHandlers.get('settings:save')(null, { providers: { freellm: { baseUrl: 'http://localhost:3001/v1', model: '', apiKey: 'freellm-unified-key' } } });
+  assert.deepEqual(await first.ipcHandlers.get('provider:models')(null, 'freellm'), ['alpha']);
+  assert.deepEqual(await first.ipcHandlers.get('provider:models')(null, 'freellm'), ['alpha']);
+  assert.equal(router.calls.modelFetches, 1, 'the second call is served from cache');
+  assert.deepEqual(await first.ipcHandlers.get('provider:models')(null, 'freellm', true), ['alpha']);
+  assert.equal(router.calls.modelFetches, 2, 'force bypasses the cache');
+});
+
+test('bootstrap exposes cached provider models to the composer', async t => {
+  const router = routerFetch({ modelList: ['alpha', 'beta'] });
+  const harness = await createHarness(t, { fetchImpl: router.impl });
+  const first = harness.boot();
+  await sleep(50);
+  await first.ipcHandlers.get('settings:save')(null, { providers: { freellm: { baseUrl: 'http://localhost:3001/v1', model: '', apiKey: 'freellm-unified-key' } } });
+  await first.ipcHandlers.get('provider:models')(null, 'freellm');
+  const boot = await first.ipcHandlers.get('app:bootstrap')();
+  assert.deepEqual(boot.models.freellm, ['alpha', 'beta']);
+});

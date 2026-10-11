@@ -1,6 +1,6 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const state = { workspace: '', providers: {}, providerReady: {}, providerStatus: {}, providerOrder: ['ollama', 'openai', 'anthropic', 'freellm'], providerLabels: {}, toolLabels: {}, agents: [], tasks: [], currentTask: null, currentPlan: null, approvals: [], activity: [], tickets: [], agentStatuses: {}, agentTickets: {}, busy: false, editingAgent: null, activeSettingsTab: 'providers', taskBudget: 40, localProviders: ['ollama'], settingsDirty: false };
+const state = { workspace: '', providers: {}, providerReady: {}, providerStatus: {}, models: {}, modelChoice: {}, modelError: {}, router: {}, providerOrder: ['ollama', 'openai', 'anthropic', 'freellm'], providerLabels: {}, toolLabels: {}, agents: [], tasks: [], currentTask: null, currentPlan: null, approvals: [], activity: [], tickets: [], agentStatuses: {}, agentTickets: {}, busy: false, editingAgent: null, activeSettingsTab: 'providers', taskBudget: 40, localProviders: ['ollama'], settingsDirty: false };
 let TOOL_LABELS = {};
 
 function esc(value = '') { return String(value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch])); }
@@ -36,7 +36,9 @@ function init() {
   $('#addAgent').addEventListener('click', () => editAgent(null));
   $('#saveSettings').addEventListener('click', saveSettings);
   $('#saveAgent').addEventListener('click', saveAgent);
-  $('#routeProvider').addEventListener('change', updateProviderChrome);
+  $('#routeProvider').addEventListener('change', onProviderChange);
+  $('#routeModel').addEventListener('change', () => { state.modelChoice[activeProvider()] = $('#routeModel').value; updateProviderChrome(); });
+  $('#routeModelRefresh').addEventListener('click', async () => { await ensureModels(activeProvider(), true); updateProviderChrome(); });
   document.addEventListener('click', event => {
     const close = event.target.closest('[data-close]');
     if (close) closeModals();
@@ -90,6 +92,7 @@ async function bootstrap() {
     updateWorkspace(); updateProviderChrome(); renderTeam(); renderRecentTasks(); renderActivity(); renderApprovals(); renderTickets();
     if (result.currentTask) { state.currentTask = result.currentTask; renderTask(result.currentTask); }
     else setEmpty(true);
+    onProviderChange();
   } catch (error) { toast(error.message); }
 }
 
@@ -101,11 +104,72 @@ function updateWorkspace() {
   composer.textContent = state.workspace ? name : 'Choose a workspace to start';
   composer.title = state.workspace || '';
 }
+function providerModels(provider) { return (state.models || {})[provider] || []; }
+function currentModel(provider) {
+  const remembered = (state.modelChoice || {})[provider];
+  if (remembered) return remembered;
+  const configured = state.providers?.[provider]?.model;
+  if (configured) return configured;
+  return providerModels(provider)[0] || '';
+}
+function renderModelSelect() {
+  const select = $('#routeModel'); if (!select) return;
+  const provider = activeProvider();
+  const chosen = currentModel(provider);
+  const values = [...new Set([...(chosen ? [chosen] : []), ...providerModels(provider)])];
+  if (!values.length) { select.innerHTML = '<option value="">No model yet — reload ⟳</option>'; select.value = ''; return; }
+  select.innerHTML = values.map(model => `<option value="${esc(model)}">${esc(model)}</option>`).join('');
+  select.value = chosen;
+}
+function renderAgentModelList() {
+  let list = $('#agentModelList');
+  if (!list) { list = document.createElement('datalist'); list.id = 'agentModelList'; document.body.append(list); }
+  const values = [...new Set(Object.values(state.models || {}).flat())];
+  list.innerHTML = values.map(model => `<option value="${esc(model)}"></option>`).join('');
+}
+async function ensureModels(provider, force = false) {
+  const needsKey = !(state.localProviders || []).includes(provider);
+  if (needsKey && state.providerStatus?.[provider]?.reason === 'no-key' && !force) return providerModels(provider);
+  try {
+    const models = await window.code13.listProviderModels(provider, force);
+    state.models = { ...(state.models || {}), [provider]: models };
+    if (state.modelError) delete state.modelError[provider];
+    renderAgentModelList();
+    return models;
+  } catch (error) {
+    state.modelError = { ...(state.modelError || {}), [provider]: error.message };
+    return providerModels(provider);
+  }
+}
+async function onProviderChange() {
+  const provider = activeProvider();
+  await ensureModels(provider);
+  if (provider === 'freellm') {
+    try { state.router = { ...(state.router || {}), [provider]: await window.code13.pingProvider(provider) }; }
+    catch (error) { state.router = { ...(state.router || {}), [provider]: { reachable: false, error: error.message } }; }
+  }
+  updateProviderChrome();
+}
+function updateComposerHint() {
+  const hint = $('#composerHint'); if (!hint) return;
+  const provider = activeProvider();
+  const status = state.providerStatus?.[provider];
+  const messages = [];
+  if (provider !== 'ollama' && status?.reason === 'no-key') messages.push(`${providerLabel(provider)} needs an API key — open Settings to add one.`);
+  if (state.modelError?.[provider]) messages.push(state.modelError[provider]);
+  const router = state.router?.[provider];
+  if (provider === 'freellm' && router && !router.reachable) messages.push(router.error || 'FreeLLMAPI router is not reachable — start it, then reload models.');
+  if (provider !== 'ollama' && !currentModel(provider)) messages.push(`${providerLabel(provider)} has no model selected — pick one above or open Settings.`);
+  if (messages.length) { hint.textContent = messages[0]; hint.classList.remove('hidden'); }
+  else hint.classList.add('hidden');
+}
 function updateProviderChrome() {
   const provider = activeProvider();
   $('#providerStatus').textContent = providerLabel(provider);
   $('#providerDot').classList.toggle('remote', provider !== 'ollama');
-  $('#egressHint').textContent = providerDestination(provider, state.providers[provider]?.model || '');
+  renderModelSelect();
+  $('#egressHint').textContent = providerDestination(provider, currentModel(provider));
+  updateComposerHint();
 }
 function setEmpty(show) {
   $('#emptyState').classList.toggle('hidden', !show);
@@ -137,7 +201,7 @@ async function submitPrompt(event) {
   state.busy = true; $('#sendButton').disabled = true; $('#typingIndicator').classList.remove('hidden');
   setEmpty(false); $('#conversationHeader').classList.add('hidden'); $('#routePanel').classList.add('hidden'); $('#approvalPanel').innerHTML = '';
   try {
-    const plan = await window.code13.createPlan({ prompt, provider: activeProvider(), model: state.providers[activeProvider()]?.model || '' });
+    const plan = await window.code13.createPlan({ prompt, provider: activeProvider(), model: currentModel(activeProvider()) });
     state.currentTask = { id: plan.id, title: plan.title, status: 'awaiting-route-approval', messages: [{ role: 'user', content: prompt }], events: [] };
     state.currentPlan = plan; $('#promptInput').value = ''; renderTask(state.currentTask); renderRoute(plan); renderRecentTasks();
   } catch (error) {
@@ -349,7 +413,7 @@ async function saveSettings() {
   const budget = Number($('[data-budget]')?.value);
   if (Number.isFinite(budget) && budget > 0) data.taskBudget = budget;
   $('#settingsMessage').textContent = 'Saving…';
-  try { const result = await window.code13.saveSettings(data); state.providers = result.providers; state.providerReady = result.providerReady; state.providerStatus = result.providerStatus || state.providerStatus; state.taskBudget = result.taskBudget ?? state.taskBudget; state.settingsDirty = false; updateSaveButton(); updateProviderChrome(); renderTeam(); $('#settingsMessage').textContent = 'Settings saved locally.'; toast('Provider settings saved.'); setTimeout(() => { $('#settingsMessage').textContent = ''; }, 1800); }
+  try { const result = await window.code13.saveSettings(data); state.providers = result.providers; state.providerReady = result.providerReady; state.providerStatus = result.providerStatus || state.providerStatus; state.taskBudget = result.taskBudget ?? state.taskBudget; state.settingsDirty = false; updateSaveButton(); updateProviderChrome(); renderTeam(); onProviderChange(); $('#settingsMessage').textContent = 'Settings saved locally.'; toast('Provider settings saved.'); setTimeout(() => { $('#settingsMessage').textContent = ''; }, 1800); }
   catch (error) { $('#settingsMessage').textContent = error.message; }
 }
 async function checkProvider(provider) {
@@ -389,7 +453,7 @@ function editAgent(agentId) {
   state.editingAgent = state.agents.find(agent => agent.id === agentId) || null;
   const agent = state.editingAgent || { id: '', name: '', description: '', instructions: '', provider: 'inherit', model: '', tools: ['list_files', 'read_file', 'git_status'], memory: '', advanced: true, enabled: true, schedule: { enabled: false, intervalMinutes: 60, prompt: '' } };
   $('#agentModalTitle').textContent = agent.id ? `Edit ${agent.name}` : 'New specialist';
-  $('#agentEditor').innerHTML = `<div class="form-grid"><div class="field"><label>Agent name</label><input name="name" value="${esc(agent.name)}" placeholder="e.g. Docs specialist" maxlength="60" /></div><div class="field"><label>Provider</label><select name="provider">${['inherit', ...state.providerOrder].map(item => `<option value="${item}" ${agent.provider === item ? 'selected' : ''}>${item === 'inherit' ? 'Use task provider' : esc(providerLabel(item))}</option>`).join('')}</select></div></div><div class="form-grid"><div class="field"><label>Model override</label><input name="model" value="${esc(agent.model || '')}" placeholder="Blank uses provider default" /></div><div class="field"><label>Short description</label><input name="description" value="${esc(agent.description)}" maxlength="240" placeholder="What this agent is best at" /></div></div><div class="field"><label>Role instructions</label><textarea name="instructions" placeholder="Give this agent a clear job and working style">${esc(agent.instructions)}</textarea></div><div class="editor-section">Allowed project tools</div><div class="checkbox-grid">${Object.entries(TOOL_LABELS).map(([tool, label]) => `<label class="check-item"><input type="checkbox" name="tools" value="${tool}" ${agent.tools.includes(tool) ? 'checked' : ''} />${esc(label)}</label>`).join('')}</div><div class="editor-section">Private memory · stored locally</div><div class="field"><textarea name="memory" placeholder="Optional editable notes for this agent. These are included in its prompt.">${esc(agent.memory || '')}</textarea></div><div id="advancedFields" class="${agent.advanced ? '' : 'hidden'}"><div class="editor-section">Schedule · read-only checks run automatically</div><div class="schedule-row"><label class="check-item"><input name="scheduleEnabled" type="checkbox" ${agent.schedule?.enabled ? 'checked' : ''} /> Enable schedule</label><select name="intervalMinutes"><option value="15" ${agent.schedule?.intervalMinutes === 15 ? 'selected' : ''}>Every 15 min</option><option value="30" ${agent.schedule?.intervalMinutes === 30 ? 'selected' : ''}>Every 30 min</option><option value="60" ${!agent.schedule?.intervalMinutes || agent.schedule?.intervalMinutes === 60 ? 'selected' : ''}>Every hour</option><option value="240" ${agent.schedule?.intervalMinutes === 240 ? 'selected' : ''}>Every 4 hours</option><option value="1440" ${agent.schedule?.intervalMinutes === 1440 ? 'selected' : ''}>Daily</option></select></div><div class="field"><label>Scheduled prompt</label><textarea name="schedulePrompt" placeholder="What should this agent check?">${esc(agent.schedule?.prompt || '')}</textarea></div><label class="check-item"><input name="enabled" type="checkbox" ${agent.enabled !== false ? 'checked' : ''} /> Agent enabled</label></div>${!agent.advanced ? '<button class="small-button" data-toggle-advanced>Show advanced settings</button>' : ''}`;
+  $('#agentEditor').innerHTML = `<div class="form-grid"><div class="field"><label>Agent name</label><input name="name" value="${esc(agent.name)}" placeholder="e.g. Docs specialist" maxlength="60" /></div><div class="field"><label>Provider</label><select name="provider">${['inherit', ...state.providerOrder].map(item => `<option value="${item}" ${agent.provider === item ? 'selected' : ''}>${item === 'inherit' ? 'Use task provider' : esc(providerLabel(item))}</option>`).join('')}</select></div></div><div class="form-grid"><div class="field"><label>Model override</label><input name="model" list="agentModelList" value="${esc(agent.model || '')}" placeholder="Blank uses provider default" /></div><div class="field"><label>Short description</label><input name="description" value="${esc(agent.description)}" maxlength="240" placeholder="What this agent is best at" /></div></div><div class="field"><label>Role instructions</label><textarea name="instructions" placeholder="Give this agent a clear job and working style">${esc(agent.instructions)}</textarea></div><div class="editor-section">Allowed project tools</div><div class="checkbox-grid">${Object.entries(TOOL_LABELS).map(([tool, label]) => `<label class="check-item"><input type="checkbox" name="tools" value="${tool}" ${agent.tools.includes(tool) ? 'checked' : ''} />${esc(label)}</label>`).join('')}</div><div class="editor-section">Private memory · stored locally</div><div class="field"><textarea name="memory" placeholder="Optional editable notes for this agent. These are included in its prompt.">${esc(agent.memory || '')}</textarea></div><div id="advancedFields" class="${agent.advanced ? '' : 'hidden'}"><div class="editor-section">Schedule · read-only checks run automatically</div><div class="schedule-row"><label class="check-item"><input name="scheduleEnabled" type="checkbox" ${agent.schedule?.enabled ? 'checked' : ''} /> Enable schedule</label><select name="intervalMinutes"><option value="15" ${agent.schedule?.intervalMinutes === 15 ? 'selected' : ''}>Every 15 min</option><option value="30" ${agent.schedule?.intervalMinutes === 30 ? 'selected' : ''}>Every 30 min</option><option value="60" ${!agent.schedule?.intervalMinutes || agent.schedule?.intervalMinutes === 60 ? 'selected' : ''}>Every hour</option><option value="240" ${agent.schedule?.intervalMinutes === 240 ? 'selected' : ''}>Every 4 hours</option><option value="1440" ${agent.schedule?.intervalMinutes === 1440 ? 'selected' : ''}>Daily</option></select></div><div class="field"><label>Scheduled prompt</label><textarea name="schedulePrompt" placeholder="What should this agent check?">${esc(agent.schedule?.prompt || '')}</textarea></div><label class="check-item"><input name="enabled" type="checkbox" ${agent.enabled !== false ? 'checked' : ''} /> Agent enabled</label></div>${!agent.advanced ? '<button class="small-button" data-toggle-advanced>Show advanced settings</button>' : ''}`;
   $('#agentMessage').textContent = '';
   $('#overlay').classList.remove('hidden'); $('#settingsModal').classList.add('hidden'); $('#teamModal').classList.add('hidden'); $('#agentModal').classList.remove('hidden');
 }

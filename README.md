@@ -11,7 +11,7 @@ npm install
 npm start
 ```
 
-Open **Settings → Providers**, add an Ollama model or configure an OpenAI/Anthropic/FreeLLM provider, then choose a project folder. A route using Ollama is local. Hosted agent routes identify the provider before you approve them.
+Open **Settings → Providers**, add an Ollama model or configure an OpenAI/Anthropic/FreeLLM provider, then choose a project folder. The composer has a **ROUTE WITH** provider picker and a **MODEL** picker (with a ⟳ reload button) so you can switch provider and model inline without opening Settings; when a provider has no model list yet, Code 13 auto-loads it and falls back to the first offered model (or `auto` for FreeLLM). A route using Ollama is local. Hosted agent routes identify the provider before you approve them.
 
 ## Build for Windows
 
@@ -76,4 +76,4 @@ npm run format    # Prettier (opt-in; the shipped files use a compact style)
 npm test
 ```
 
-The test suite covers provider streams and errors, provider reachability/readiness diagnostics, FreeLLM routing end-to-end, route/privacy behavior, workspace path checks, approved file writes and shell commands, restart-persistent approvals, Builder/Reviewer sequencing, ticket creation, agent handoffs, the Ask-me round trip, the circuit breaker, restart-persistent questions, model-output parsing, secret-file and VCS-internal policy (including `git_diff` filtering and token redaction), recoverable tool errors, cancelling a task that is awaiting approval, shell-risk assessment, scheduled read-only permissions, and the extracted Git/shell/workspace tool modules.
+The test suite covers provider streams and errors, provider reachability/readiness diagnostics, composer model auto-resolution and model-list caching, FreeLLM routing end-to-end, route/privacy behavior, workspace path checks, approved file writes and shell commands, restart-persistent approvals, Builder/Reviewer sequencing, ticket creation, agent handoffs, the Ask-me round trip, the circuit breaker, restart-persistent questions, model-output parsing, secret-file and VCS-internal policy (including `git_diff` filtering and token redaction), recoverable tool errors, cancelling a task that is awaiting approval, shell-risk assessment, scheduled read-only permissions, and the extracted Git/shell/workspace tool modules.

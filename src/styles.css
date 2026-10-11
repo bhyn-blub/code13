@@ -7,3 +7,6 @@
 .risk-warning{background:#3a1f22;border:1px solid #7a4247;border-radius:6px;margin-top:9px;padding:8px 9px;color:#ffc9c9;font-size:9px;line-height:1.55}
 .risk-confirm{margin-top:8px;border-color:#7a4247;background:#2b1d1f;color:#f0c9c9}
 .primary-button:disabled{opacity:.4;cursor:not-allowed}
+.model-select-wrap select{max-width:190px}
+.composer-hint{max-width:820px;margin:8px auto 0;border:1px solid #6b4d2e;background:#2a2115;color:#e8c98c;border-radius:6px;padding:7px 11px;font-size:9px;text-align:center}
+.composer-hint.hidden{display:none}

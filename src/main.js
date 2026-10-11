@@ -75,6 +75,34 @@ function providerStatusMap() {
 const modelClient = createModelClient({ getProviders, getCredential });
 const { callModel, listModels, testProvider, ping } = modelClient;
 
+// Short-lived cache of provider model lists so the composer can offer models
+// without re-hitting the provider on every keystroke.
+const MODEL_CACHE_TTL = 60 * 1000;
+const modelCache = new Map();
+async function getModelsCached(provider, force = false) {
+  const entry = modelCache.get(provider);
+  if (!force && entry && Date.now() - entry.at < MODEL_CACHE_TTL) return entry.models;
+  const models = await listModels(provider);
+  modelCache.set(provider, { models, at: Date.now() });
+  return models;
+}
+function cachedModelsMap() {
+  return Object.fromEntries([...modelCache].map(([provider, entry]) => [provider, entry.models]));
+}
+// Resolution order: explicit request -> provider default -> first offered model.
+// FreeLLM/OpenAI-compatible providers fall back to "auto" so an empty model
+// never blocks starting a task.
+async function resolveModel(provider, requested, providers = getProviders()) {
+  const explicit = String(requested || providers[provider]?.model || '').trim();
+  if (explicit) return explicit;
+  if (provider === 'ollama') return '';
+  try {
+    const models = await getModelsCached(provider);
+    if (models.length) return models[0];
+  } catch { /* key missing or router offline; fall through */ }
+  return provider === 'freellm' ? 'auto' : '';
+}
+
 function listPendingApprovals() {
   return db.prepare("SELECT id,task_id,worker_id,action,payload,created_at FROM approvals WHERE status='pending' ORDER BY created_at").all().map(row => ({
     id: row.id, taskId: row.task_id, workerId: row.worker_id, action: row.action, payload: JSON.parse(row.payload), createdAt: row.created_at
@@ -184,6 +212,7 @@ ipcMain.handle('app:bootstrap', () => {
     providerOrder: PROVIDERS, providerLabels: PROVIDER_LABELS, toolLabels: TOOL_LABELS,
     providerReady: providerReadyMap(),
     providerStatus: providerStatusMap(),
+    models: cachedModelsMap(),
     agents, recentTasks, currentTask: currentTask ? getTaskSummary(currentTask.id) : null,
     pendingApprovals: listPendingApprovals(), secureStorageAvailable: safeStorage.isEncryptionAvailable()
   };
@@ -218,7 +247,7 @@ ipcMain.handle('settings:save', (_event, data) => {
 });
 
 ipcMain.handle('provider:test', async (_event, provider) => ({ provider, models: await testProvider(provider) }));
-ipcMain.handle('provider:models', async (_event, provider) => await listModels(provider));
+ipcMain.handle('provider:models', async (_event, provider, force) => await getModelsCached(provider, !!force));
 ipcMain.handle('provider:ping', async (_event, provider) => ({ provider, ...(await ping(provider)) }));
 
 ipcMain.handle('agent:save', (_event, agent) => {
@@ -258,7 +287,7 @@ ipcMain.handle('task:plan', async (_event, request) => {
   if (!workspace || !existsSync(workspace)) throw new Error('Choose a project folder before starting a task.');
   const providers = getProviders();
   const provider = PROVIDERS.includes(request.provider) ? request.provider : 'ollama';
-  const model = String(request.model || providers[provider].model || '').trim();
+  const model = await resolveModel(provider, request.model, providers);
   const agents = getAgents().filter(agent => agent.enabled !== false);
   if (!agents.length) throw new Error('Enable at least one agent in the team workspace.');
   const id = makeId();

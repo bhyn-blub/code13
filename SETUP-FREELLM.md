@@ -36,8 +36,11 @@ provider keys — it sends requests to your local router, which forwards them.
 ## 4. Run a task
 
 Type a request in the chat box, choose **FreeLLM · local router** in the
-"ROUTE WITH" selector, and send. Approve the proposed route, then watch the
-conversation and activity feed.
+"ROUTE WITH" selector, then pick a model from the **MODEL** selector next to it
+(click **⟳** to reload the list). Code 13 auto-loads the model list when you
+switch to FreeLLM, and if no model is chosen it falls back to the first offered
+model — or `auto` — so a task can always start. Send, approve the proposed
+route, then watch the conversation and activity feed.
 
 ## Troubleshooting
 
@@ -45,7 +48,7 @@ conversation and activity feed.
 | --- | --- | --- |
 | "FreeLLMAPI router not reachable at http://localhost:3001/v1" | The router app is not running (port 3001 is closed). | Start FreeLLMAPI and click **Check router** again. |
 | "The unified key was rejected" | The key is wrong or stale. | Copy a fresh unified key from the FreeLLMAPI dashboard and save it in Settings. |
-| "Add a model" / "Choose a model for …" | No model is selected for the provider. | Click **Load models** and pick one, then **Save settings**. |
+| "Add a model" / "Choose a model for …" | No model is selected for the provider. | Pick one in the composer's **MODEL** selector, or click **Load models** in Settings and Save. |
 | "FreeLLMAPI could not reach any upstream provider" | The router is up but has no working provider keys / fallback chain. | Add or fix provider keys and reorder the fallback chain in the FreeLLMAPI dashboard. |
 | "That model may not exist" | The model id is not offered by the router. | Click **Load models** and choose an id from the list. |
 | Model dropdown is empty after **Load models** | The router is reachable but returned no models, or the key lacks access. | Verify provider keys in the dashboard and the unified key in Settings. |
