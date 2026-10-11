@@ -18,6 +18,7 @@ function openDatabase({ databasePath, presets = [], defaultProviders = {}, defau
     CREATE TABLE IF NOT EXISTS memory (id TEXT PRIMARY KEY, task_id TEXT, agent_id TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS mcp_servers (id TEXT PRIMARY KEY, name TEXT NOT NULL, command TEXT NOT NULL, args TEXT NOT NULL DEFAULT '[]', env TEXT NOT NULL DEFAULT '{}', enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS custom_commands (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', prompt TEXT NOT NULL, args TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', version TEXT NOT NULL DEFAULT '1.0.0', author TEXT NOT NULL DEFAULT '', manifest TEXT NOT NULL DEFAULT '{}', enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS idx_events_task ON events(task_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status, created_at);
     CREATE INDEX IF NOT EXISTS idx_tickets_task ON tickets(task_id, created_at);
@@ -47,7 +48,7 @@ function openDatabase({ databasePath, presets = [], defaultProviders = {}, defau
   return db;
 }
 
-module.exports = { openDatabase, getMCPServers, getMCPServer, createMCPServer, updateMCPServer, deleteMCPServer, getCustomCommands, getCustomCommand, createCustomCommand, updateCustomCommand, deleteCustomCommand };
+module.exports = { openDatabase, getMCPServers, getMCPServer, createMCPServer, updateMCPServer, deleteMCPServer, getCustomCommands, getCustomCommand, createCustomCommand, updateCustomCommand, deleteCustomCommand, getSkills, getSkill, createSkill, updateSkill, deleteSkill };
 
 // MCP server helpers
 function getMCPServers(db) {
@@ -116,4 +117,40 @@ function updateCustomCommand(db, id, updates) {
 
 function deleteCustomCommand(db, id) {
   db.prepare('DELETE FROM custom_commands WHERE id=?').run(id);
+}
+
+// Skills helpers
+function getSkills(db) {
+  return db.prepare('SELECT id, name, description, version, author, manifest, enabled, created_at AS createdAt, updated_at AS updatedAt FROM skills ORDER BY name').all();
+}
+
+function getSkill(db, id) {
+  return db.prepare('SELECT id, name, description, version, author, manifest, enabled, created_at AS createdAt, updated_at AS updatedAt FROM skills WHERE id=?').get(id);
+}
+
+function createSkill(db, { id, name, description = '', version = '1.0.0', author = '', manifest = {} }) {
+  const stamp = new Date().toISOString();
+  db.prepare('INSERT INTO skills(id,name,description,version,author,manifest,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)').run(id, name, description, version, author, JSON.stringify(manifest), 1, stamp, stamp);
+  return getSkill(db, id);
+}
+
+function updateSkill(db, id, updates) {
+  const fields = [];
+  const values = [];
+  if (updates.name !== undefined) { fields.push('name=?'); values.push(updates.name); }
+  if (updates.description !== undefined) { fields.push('description=?'); values.push(updates.description); }
+  if (updates.version !== undefined) { fields.push('version=?'); values.push(updates.version); }
+  if (updates.author !== undefined) { fields.push('author=?'); values.push(updates.author); }
+  if (updates.manifest !== undefined) { fields.push('manifest=?'); values.push(JSON.stringify(updates.manifest)); }
+  if (updates.enabled !== undefined) { fields.push('enabled=?'); values.push(updates.enabled ? 1 : 0); }
+  if (!fields.length) return getSkill(db, id);
+  fields.push('updated_at=?');
+  values.push(new Date().toISOString());
+  values.push(id);
+  db.prepare(`UPDATE skills SET ${fields.join(',')} WHERE id=?`).run(...values);
+  return getSkill(db, id);
+}
+
+function deleteSkill(db, id) {
+  db.prepare('DELETE FROM skills WHERE id=?').run(id);
 }

@@ -90,6 +90,13 @@ function init() {
     if (event.target.closest('[data-cmd-run]')) { runCustomCommand(event.target.closest('[data-cmd-run]').dataset.cmdRun); return; }
     if (event.target.closest('[data-cmd-save]')) { await saveCustomCommand(event); return; }
     if (event.target.closest('[data-cmd-cancel]')) { cancelCmdEditor(); return; }
+    // Skills handlers
+    if (event.target.closest('[data-skill-add]')) { addSkill(); return; }
+    if (event.target.closest('[data-skill-edit]')) { editSkill(event.target.closest('[data-skill-edit]').dataset.skillEdit); return; }
+    if (event.target.closest('[data-skill-remove]')) { await removeSkill(event.target.closest('[data-skill-remove]').dataset.skillRemove); return; }
+    if (event.target.closest('[data-skill-toggle]')) { await toggleSkill(event.target.closest('[data-skill-toggle]').dataset.skillToggle, event.target.closest('[data-skill-toggle]').checked); return; }
+    if (event.target.closest('[data-skill-save]')) { await saveSkill(event); return; }
+    if (event.target.closest('[data-skill-cancel]')) { cancelSkillEditor(); return; }
   });
   $('#settingsBody').addEventListener('input', event => {
     if (event.target.matches('input, textarea, select')) markSettingsDirty();
@@ -527,6 +534,9 @@ function renderSettings() {
   } else if (state.activeSettingsTab === 'commands') {
     const commands = state.customCommands || [];
     body.innerHTML = `<div class="commands-section"><div class="commands-header"><strong>Custom Commands</strong><button class="small-button" data-cmd-add>＋ Add command</button></div><div id="commandsList">${commands.length ? commands.map(cmd => `<div class="command-card" data-cmd-id="${esc(cmd.id)}"><div class="command-head"><strong>${esc(cmd.name)}</strong></div><div class="command-desc">${esc(cmd.description || '(no description)')}</div><div class="command-prompt"><small>Prompt: ${esc(cmd.prompt.slice(0, 100))}${cmd.prompt.length > 100 ? '…' : ''}</small></div><div class="command-args"><small>Args: ${esc(JSON.stringify(cmd.args))}</small></div><div class="command-actions"><button class="small-button" data-cmd-edit="${esc(cmd.id)}">Edit</button><button class="small-button" data-cmd-remove="${esc(cmd.id)}">Remove</button><button class="small-button" data-cmd-run="${esc(cmd.id)}">Run</button></div></div>`).join('') : '<p class="commands-empty">No custom commands. Add a command to create reusable prompt templates with arguments.</p>'}</div></div><div id="cmdEditor" class="cmd-editor hidden"></div>`;
+  } else if (state.activeSettingsTab === 'skills') {
+    const skills = state.skills || [];
+    body.innerHTML = `<div class="skills-section"><div class="skills-header"><strong>Skills / Plugins</strong><button class="small-button" data-skill-add>＋ Add skill</button></div><div id="skillsList">${skills.length ? skills.map(skill => `<div class="skill-card" data-skill-id="${esc(skill.id)}"><div class="skill-head"><strong>${esc(skill.name)}</strong><span class="provider-badge ${skill.enabled ? '' : 'remote'}">${skill.enabled ? 'Enabled' : 'Disabled'}</span></div><div class="skill-meta"><span>v${esc(skill.version)}</span><span>by ${esc(skill.author || 'unknown')}</span></div><div class="skill-desc">${esc(skill.description || '(no description)')}</div><div class="skill-manifest"><small>Manifest: ${esc(JSON.stringify(skill.manifest).slice(0, 200))}</small></div><div class="skill-actions"><label class="check-item"><input type="checkbox" data-skill-toggle="${esc(skill.id)}" ${skill.enabled ? 'checked' : ''} /> Enabled</label><button class="small-button" data-skill-edit="${esc(skill.id)}">Edit</button><button class="small-button" data-skill-remove="${esc(skill.id)}">Remove</button></div></div>`).join('') : '<p class="skills-empty">No skills installed. Add a skill to extend agent capabilities with predefined workflows.</p>'}</div></div><div id="skillEditor" class="skill-editor hidden"></div>`;
   } else {
     body.innerHTML = `<div class="privacy-row"><strong>Local orchestration</strong><p>Task state, activity, ticket board, agent configurations, and memory notes are stored on this device in the app’s local database.</p></div><div class="privacy-row"><strong>Provider data flow</strong><p>Ollama requests stay on this device. OpenAI and Anthropic receive prompts and relevant context after you approve a route that names that provider. FreeLLM sends context to your local router, which forwards to free hosted model tiers you selected there.</p></div><div class="privacy-row"><strong>Model-driven routing</strong><p>By default, route planning uses local keyword matching only — no task context is sent to hosted providers before you approve a route. Enable this to let hosted providers (OpenAI, Anthropic, FreeLLM) see the task context for routing before approval.</p><label class="check-item"><input type="checkbox" data-hosted-model-routing ${state.hostedModelRouting ? 'checked' : ''} /> Allow hosted providers to see task context for route planning before approval</label></div><div class="privacy-row"><strong>Ask me</strong><p>When an agent needs a human decision, the question appears in the approval area and waits for your answer. You never approve blindly.</p></div><div class="privacy-row"><strong>Approvals</strong><p>Code 13 asks before each file-write operation and shell command. Scheduled checks can read project files and Git status, but write/command actions wait in the approval queue.</p></div><div class="privacy-row"><strong>Credentials</strong><p>${state.secureStorageAvailable ? 'Windows secure credential storage is available.' : 'Windows secure credential storage is unavailable. Provider keys cannot be stored safely in this session.'} Secrets are excluded from activity history.</p></div>`;
   }
@@ -699,6 +709,63 @@ function cancelCmdEditor() {
   $('#cmdEditor').classList.add('hidden');
   $('#cmdEditor').innerHTML = '';
   $('#commandsList')?.classList.remove('hidden');
+}
+
+async function addSkill() {
+  const editor = $('#skillEditor');
+  editor.classList.remove('hidden');
+  editor.innerHTML = `<div class="skill-editor-form"><h4>Add Skill</h4><div class="form-grid"><div class="field"><label>Name</label><input name="name" placeholder="e.g. code-review, test-gen" /></div><div class="field"><label>Version</label><input name="version" value="1.0.0" /></div></div><div class="form-grid"><div class="field"><label>Description</label><input name="description" placeholder="What this skill does" /></div><div class="field"><label>Author</label><input name="author" placeholder="Author name" /></div></div><div class="field"><label>Manifest (JSON)</label><textarea name="manifest" placeholder='{"tools": ["read_file", "write_file"], "prompts": {...}}'></textarea></div><div class="skill-editor-actions"><button class="secondary-button" data-skill-cancel>Cancel</button><button class="primary-button" data-skill-save>Save</button></div></div>`;
+  $('#skillsList').classList.add('hidden');
+}
+async function editSkill(id) {
+  const skill = state.skills.find(s => s.id === id);
+  if (!skill) return;
+  const editor = $('#skillEditor');
+  editor.classList.remove('hidden');
+  editor.innerHTML = `<div class="skill-editor-form"><h4>Edit Skill</h4><div class="form-grid"><div class="field"><label>Name</label><input name="name" value="${esc(skill.name)}" /></div><div class="field"><label>Version</label><input name="version" value="${esc(skill.version)}" /></div></div><div class="form-grid"><div class="field"><label>Description</label><input name="description" value="${esc(skill.description)}" /></div><div class="field"><label>Author</label><input name="author" value="${esc(skill.author)}" /></div></div><div class="field"><label>Manifest (JSON)</label><textarea name="manifest">${esc(JSON.stringify(skill.manifest, null, 2))}</textarea></div><div class="skill-editor-actions"><button class="secondary-button" data-skill-cancel>Cancel</button><button class="primary-button" data-skill-save data-skill-id="${esc(id)}">Save</button></div></div>`;
+  $('#skillsList').classList.add('hidden');
+}
+async function saveSkill(event) {
+  const id = event.target.dataset.skillId || crypto.randomUUID();
+  const form = event.target.closest('.skill-editor-form');
+  const name = $('[name="name"]', form).value.trim();
+  const version = $('[name="version"]', form).value.trim() || '1.0.0';
+  const description = $('[name="description"]', form).value.trim();
+  const author = $('[name="author"]', form).value.trim();
+  const manifest = JSON.parse($('[name="manifest"]', form).value || '{}');
+  if (!name) { toast('Name is required.'); return; }
+  try {
+    if (event.target.dataset.skillId) {
+      await window.code13.updateSkill(id, { name, version, description, author, manifest });
+    } else {
+      await window.code13.addSkill({ id, name, version, description, author, manifest });
+    }
+    state.skills = (await window.code13.listSkills()) || [];
+    renderSettings();
+    toast(event.target.dataset.skillId ? 'Skill updated.' : 'Skill added.');
+  } catch (error) { toast(error.message); }
+}
+async function removeSkill(id) {
+  if (!confirm('Remove this skill?')) return;
+  try {
+    await window.code13.removeSkill(id);
+    state.skills = (await window.code13.listSkills()) || [];
+    renderSettings();
+    toast('Skill removed.');
+  } catch (error) { toast(error.message); }
+}
+async function toggleSkill(id, enabled) {
+  try {
+    await window.code13.toggleSkill(id, enabled);
+    state.skills = (await window.code13.listSkills()) || [];
+    renderSettings();
+    toast(`Skill ${enabled ? 'enabled' : 'disabled'}.`);
+  } catch (error) { toast(error.message); }
+}
+function cancelSkillEditor() {
+  $('#skillEditor').classList.add('hidden');
+  $('#skillEditor').innerHTML = '';
+  $('#skillsList')?.classList.remove('hidden');
 }
 
 function renderAgentManager() {

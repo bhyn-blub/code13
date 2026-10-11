@@ -14,7 +14,7 @@ const { runShell } = require('./lib/shell');
 const { toolInstructions } = require('./lib/prompts');
 const { parseJson, normalizeToolCall } = require('./lib/parse');
 const { startMCPServer, getAllMCPTools, stopMCPServer, getMCPClient } = require('./lib/mcp');
-const { getMCPServers, getMCPServer, createMCPServer, updateMCPServer, deleteMCPServer, getCustomCommands, getCustomCommand, createCustomCommand, updateCustomCommand, deleteCustomCommand } = require('./lib/db');
+const { getMCPServers, getMCPServer, createMCPServer, updateMCPServer, deleteMCPServer, getCustomCommands, getCustomCommand, createCustomCommand, updateCustomCommand, deleteCustomCommand, getSkills, getSkill, createSkill, updateSkill, deleteSkill } = require('./lib/db');
 
 let db;
 let win;
@@ -294,7 +294,7 @@ ipcMain.handle('app:bootstrap', () => {
     sessions: getSessions(), currentSessionId, recentTasks, agents,
     currentTask: currentTask ? getTaskSummary(currentTask.id) : null,
     pendingApprovals: listPendingApprovals(), secureStorageAvailable: safeStorage.isEncryptionAvailable(),
-    mcpServers: getMCPServers(db), mcpTools: getAllMCPTools(), customCommands: getCustomCommands(db)
+    mcpServers: getMCPServers(db), mcpTools: getAllMCPTools(), customCommands: getCustomCommands(db), skills: getSkills(db)
   };
 });
 
@@ -456,6 +456,26 @@ ipcMain.handle('command:update', (_event, id, updates) => {
 ipcMain.handle('command:remove', (_event, id) => {
   deleteCustomCommand(db, id);
   return { commands: getCustomCommands(db) };
+});
+
+ipcMain.handle('skill:list', () => getSkills(db));
+ipcMain.handle('skill:get', (_event, id) => getSkill(db, id));
+ipcMain.handle('skill:add', (_event, skill) => {
+  const id = skill.id || makeId();
+  createSkill(db, { id, name: skill.name, description: skill.description, version: skill.version, author: skill.author, manifest: skill.manifest });
+  return { skills: getSkills(db) };
+});
+ipcMain.handle('skill:update', (_event, id, updates) => {
+  updateSkill(db, id, updates);
+  return { skills: getSkills(db) };
+});
+ipcMain.handle('skill:remove', (_event, id) => {
+  deleteSkill(db, id);
+  return { skills: getSkills(db) };
+});
+ipcMain.handle('skill:toggle', (_event, id, enabled) => {
+  updateSkill(db, id, { enabled });
+  return { skills: getSkills(db) };
 });
 
 ipcMain.handle('task:plan', async (_event, request) => {

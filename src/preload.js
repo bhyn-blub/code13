@@ -31,6 +31,11 @@ contextBridge.exposeInMainWorld('code13', {
   addCustomCommand: (cmd) => ipcRenderer.invoke('command:add', cmd),
   updateCustomCommand: (id, updates) => ipcRenderer.invoke('command:update', id, updates),
   removeCustomCommand: (id) => ipcRenderer.invoke('command:remove', id),
+  listSkills: () => ipcRenderer.invoke('skill:list'),
+  addSkill: (skill) => ipcRenderer.invoke('skill:add', skill),
+  updateSkill: (id, updates) => ipcRenderer.invoke('skill:update', id, updates),
+  removeSkill: (id) => ipcRenderer.invoke('skill:remove', id),
+  toggleSkill: (id, enabled) => ipcRenderer.invoke('skill:toggle', id, enabled),
   onEvent: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('code13:event', listener);
