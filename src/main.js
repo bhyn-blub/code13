@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const { existsSync } = require('node:fs');
 const { randomUUID } = require('node:crypto');
 const { resolveWorkspacePath, assertNoSymlinkPath, isSensitivePath, canRunScheduledTool, redactForLog, assessShellRisk } = require('./lib/policy');
-const { PROVIDERS, DEFAULT_PROVIDERS, LOCAL_PROVIDERS, PROVIDER_LABELS, TOOL_LABELS, COORD_TOOLS, PROJECT_TOOLS, DEFAULT_TASK_BUDGET, DEFAULT_MAX_STEPS, CONTEXT_TOKEN_BUDGET, TOOL_RESULT_LIMIT, PRESETS, destinationForProviders } = require('./lib/constants');
+const { PROVIDERS, DEFAULT_PROVIDERS, LOCAL_PROVIDERS, PROVIDER_LABELS, TOOL_LABELS, COORD_TOOLS, PROJECT_TOOLS, DEFAULT_TASK_BUDGET, DEFAULT_MAX_STEPS, CONTEXT_TOKEN_BUDGET, TOOL_RESULT_LIMIT, PRESETS, destinationForProviders, providerLabel } = require('./lib/constants');
 const { openDatabase } = require('./lib/db');
 const { createModelClient } = require('./lib/model');
 const { compactMessages } = require('./lib/context');
@@ -284,7 +284,7 @@ ipcMain.handle('app:bootstrap', () => {
   const recentTasks = sessionTasks(currentSessionId);
   const currentTask = db.prepare('SELECT id,status FROM tasks ORDER BY created_at DESC LIMIT 50').all().find(task => ['awaiting-approval', 'awaiting-route-approval', 'running'].includes(task.status)) || null;
   return {
-    workspace: getSetting('workspace'), providers, localProviders: LOCAL_PROVIDERS, taskBudget: getTaskBudget(), maxSteps: getMaxSteps(),
+    workspace: getSetting('workspace'), providers, localProviders: LOCAL_PROVIDERS, taskBudget: getTaskBudget(), maxSteps: getMaxSteps(), hostedModelRouting: getSetting('hosted_model_routing') === 'true',
     providerOrder: PROVIDERS, providerLabels: PROVIDER_LABELS, toolLabels: TOOL_LABELS,
     providerReady: providerReadyMap(),
     providerStatus: providerStatusMap(),
@@ -365,6 +365,9 @@ ipcMain.handle('settings:save', (_event, data) => {
     const steps = Math.max(4, Math.min(200, Number(data.maxSteps) || DEFAULT_MAX_STEPS));
     setSetting('task_max_steps', String(steps));
   }
+  if (data.hostedModelRouting !== undefined) {
+    setSetting('hosted_model_routing', data.hostedModelRouting ? 'true' : 'false');
+  }
   return { providers, providerReady: providerReadyMap(), providerStatus: providerStatusMap(), taskBudget: getTaskBudget(), maxSteps: getMaxSteps() };
 });
 
@@ -434,7 +437,10 @@ ipcMain.handle('task:plan', async (_event, request) => {
   let routedProvider = provider;
   let routedModel = model;
   let destination = 'Routing uses local matching; no task context has been sent to a hosted provider.';
-  if (model && provider === 'ollama') {
+  const hostedModelRouting = getSetting('hosted_model_routing') === 'true';
+  const canModelRoute = model && (provider === 'ollama' || hostedModelRouting);
+  let usedHostedModelRouting = false;
+  if (canModelRoute) {
     const config = { ...providers[provider], model };
     setSetting('providers', JSON.stringify({ ...providers, [provider]: config }));
     try {
@@ -446,6 +452,7 @@ ipcMain.handle('task:plan', async (_event, request) => {
       const allowed = new Set(agents.map(agent => agent.id));
       chosenIds = Array.isArray(route?.agents) ? route.agents.filter(agentId => allowed.has(agentId)).slice(0, 3) : [];
       rationale = String(route?.reason || rationale).slice(0, 400);
+      if (provider !== 'ollama' && hostedModelRouting) usedHostedModelRouting = true;
     } catch (error) {
       db.prepare('DELETE FROM messages WHERE task_id=?').run(id);
       db.prepare('DELETE FROM tasks WHERE id=?').run(id);
@@ -472,7 +479,9 @@ ipcMain.handle('task:plan', async (_event, request) => {
     db.prepare('DELETE FROM tasks WHERE id=?').run(id);
     throw new Error(`Choose a model for ${missingModel.name} (${missingProvider}) in Settings before starting.`);
   }
-  destination = destinationForProviders(plannedProviders);
+  destination = usedHostedModelRouting
+    ? `Route planning used ${providerLabel(provider)} with your opt-in setting. Task context was sent to ${providerLabel(provider)} before route approval.`
+    : destinationForProviders(plannedProviders);
   const plan = { id, title, prompt: expandedPrompt, workspace, provider: routedProvider, model: routedModel, destination, reason: rationale, steps: selected.map(agent => { const agentProvider = agent.provider === 'inherit' ? routedProvider : agent.provider; return { agentId: agent.id, name: agent.name, provider: agentProvider, model: agent.model || (agent.provider === 'inherit' ? routedModel : providers[agentProvider]?.model || ''), tools: agent.tools }; }) };
   db.prepare('UPDATE tasks SET status=? WHERE id=?').run('awaiting-route-approval', id);
   pushEvent(id, 'route-proposed', plan);
