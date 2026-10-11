@@ -355,6 +355,6 @@ test('deleting a session removes its finished tasks', async t => {
   }
   const boot = await ipcHandlers.get('app:bootstrap')();
   await ipcHandlers.get('session:delete')(null, boot.currentSessionId);
-  const after = await ipcHandlers.get('app:bootstrap')();
+  await ipcHandlers.get('app:bootstrap')();
   assert.equal(await ipcHandlers.get('task:get')(null, plan.id), null);
 });
