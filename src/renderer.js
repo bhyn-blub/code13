@@ -394,6 +394,10 @@ async function createNewSession() {
     toast('New session started.');
   } catch (error) { toast(error.message); }
 }
+function debounce(fn, delay) {
+  let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), delay); };
+}
+
 function initFileAutocomplete() {
   const input = $('#promptInput');
   const suggestions = $('#suggestions');
