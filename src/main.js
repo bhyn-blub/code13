@@ -692,7 +692,11 @@ async function runWorker({ taskId, workspace, agent, request, reportContext, pro
   for (let step = 0; step < maxSteps; step++) {
     if (cancelledTasks.has(taskId)) throw new Error('Task cancelled.');
     pushEvent(taskId, 'agent-thinking', { agentId: agent.id, name: agent.name });
-    const output = await callModelBudget(taskId, provider, messages);
+    const output = await callModelBudget(taskId, provider, messages, {
+      onChunk: chunk => {
+        if (chunk) pushEvent(taskId, 'chunk', { agentId: agent.id, content: String(chunk) });
+      }
+    });
     messages.push({ role: 'assistant', content: output });
     const parsed = parseJson(output);
     if (!parsed || parsed.type === 'final' || (!parsed.type && !parsed.name && !parsed.tool && !parsed.tool_name)) {

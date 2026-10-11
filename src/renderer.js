@@ -1,6 +1,6 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const state = { workspace: '', providers: {}, providerReady: {}, providerStatus: {}, models: {}, modelChoice: {}, modelError: {}, router: {}, providerOrder: ['ollama', 'openai', 'anthropic', 'freellm'], providerLabels: {}, toolLabels: {}, agents: [], tasks: [], currentTask: null, currentPlan: null, approvals: [], activity: [], tickets: [], agentStatuses: {}, agentTickets: {}, busy: false, editingAgent: null, activeSettingsTab: 'providers', taskBudget: 40, maxSteps: 24, localProviders: ['ollama'], settingsDirty: false, sessions: [], currentSessionId: '' };
+const state = { workspace: '', providers: {}, providerReady: {}, providerStatus: {}, models: {}, modelChoice: {}, modelError: {}, router: {}, providerOrder: ['ollama', 'openai', 'anthropic', 'freellm'], providerLabels: {}, toolLabels: {}, agents: [], tasks: [], currentTask: null, currentPlan: null, approvals: [], activity: [], tickets: [], agentStatuses: {}, agentTickets: {}, busy: false, editingAgent: null, activeSettingsTab: 'providers', taskBudget: 40, maxSteps: 24, localProviders: ['ollama'], settingsDirty: false, sessions: [], currentSessionId: '', streaming: null };
 let TOOL_LABELS = {};
 
 function esc(value = '') { return String(value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch])); }
@@ -264,8 +264,9 @@ function handleEvent(event) {
   }
   state.activity.unshift(event); state.activity = state.activity.slice(0, 45); renderActivity();
   if (event.type === 'route-proposed') { state.currentPlan = event; renderRoute(event); }
-  if (event.type === 'task-status') { if (state.currentTask?.id === event.taskId) { state.currentTask.status = event.status; $('#typingIndicator').classList.toggle('hidden', event.status !== 'running'); } const task = state.tasks.find(item => item.id === event.taskId); if (task) task.status = event.status; renderRecentTasks(); }
+  if (event.type === 'task-status') { if (event.status === 'completed' || event.status === 'failed' || event.status === 'cancelled') { state.streaming = null; $('#streamingMessage')?.remove(); } if (state.currentTask?.id === event.taskId) { state.currentTask.status = event.status; $('#typingIndicator').classList.toggle('hidden', event.status !== 'running'); } const task = state.tasks.find(item => item.id === event.taskId); if (task) task.status = event.status; renderRecentTasks(); }
   if (event.type === 'agent-status') { state.agentStatuses[event.agentId] = event.status; if (event.ticketCode) state.agentTickets[event.agentId] = event.ticketCode; renderTeam(); }
+  if (event.type === 'chunk') { renderStreamingChunk(event.agentId, event.content); }
   if (event.type === 'ticket-created') { state.tickets.push(event.ticket); renderTickets(); }
   if (event.type === 'ticket-updated') { const index = state.tickets.findIndex(ticket => ticket.code === event.ticket.code); if (index >= 0) state.tickets[index] = { ...state.tickets[index], ...event.ticket }; else state.tickets.push(event.ticket); renderTickets(); }
   if (event.type === 'approval-requested') { state.approvals.unshift({ ...event, id: event.approvalId, taskId: event.taskId }); renderApprovals(); }
@@ -276,10 +277,30 @@ function handleEvent(event) {
   if (event.type === 'handoff') { const from = state.agents.find(agent => agent.id === event.agentId)?.name || event.agentId; const to = state.agents.find(agent => agent.id === event.toAgentId)?.name || event.toAgentId; appendMessage('assistant', `${from} handed over ${event.ticketCode} to ${to}.${event.note ? ` ${event.note}` : ''}`); }
   if (event.type === 'tool-result') appendMessage('assistant', `${event.workerId ? state.agents.find(agent => agent.id === event.workerId)?.name || 'Agent' : 'Agent'} · ${event.tool}\n${event.result}`);
   if (event.type === 'tool-error') appendMessage('assistant', `${event.name || 'Agent'} · ${event.tool}\nTool error: ${event.message}`);
-  if (event.type === 'final') { appendMessage('assistant', event.content); $('#typingIndicator').classList.add('hidden'); }
-  if (event.type === 'error') { appendMessage('assistant', `The run stopped: ${event.message}`); $('#typingIndicator').classList.add('hidden'); }
+  if (event.type === 'final') { state.streaming = null; $('#streamingMessage')?.remove(); appendMessage('assistant', event.content); $('#typingIndicator').classList.add('hidden'); }
+  if (event.type === 'error') { state.streaming = null; $('#streamingMessage')?.remove(); appendMessage('assistant', `The run stopped: ${event.message}`); $('#typingIndicator').classList.add('hidden'); }
   if (event.type === 'resume-required') appendMessage('assistant', event.message);
   renderRecentTasks();
+}
+function renderStreamingChunk(agentId, content) {
+  const container = $('#messages');
+  if (!container) return;
+  const agent = state.agents.find(item => item.id === agentId);
+  const name = agent ? agent.name : 'Agent';
+  let el = $('#streamingMessage');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'streamingMessage';
+    el.className = 'message assistant-message streaming-message';
+    el.innerHTML = `<div class="message-agent">${esc(name)}</div><div class="message-content streaming-content"></div>`;
+    container.appendChild(el);
+  }
+  const contentEl = el.querySelector('.streaming-content');
+  if (contentEl) {
+    contentEl.textContent += content;
+    contentEl.scrollTop = contentEl.scrollHeight;
+  }
+  container.scrollTop = container.scrollHeight;
 }
 function renderApprovals() {
   const pending = state.approvals.filter(item => item.status !== 'approved' && item.status !== 'rejected');
@@ -378,7 +399,7 @@ async function switchSession() {
     state.currentSessionId = result.currentSessionId;
     state.sessions = result.sessions || state.sessions;
     state.tasks = result.recentTasks || [];
-    state.currentTask = null; state.currentPlan = null; state.activity = []; state.tickets = []; state.approvals = [];
+    state.currentTask = null; state.currentPlan = null; state.activity = []; state.tickets = []; state.approvals = []; state.streaming = null; $('#streamingMessage')?.remove();
     $('#messages').innerHTML = ''; $('#routePanel').classList.add('hidden'); $('#approvalPanel').innerHTML = '';
     renderSessions(); renderRecentTasks(); renderActivity(); renderTickets(); setEmpty(true);
   } catch (error) { toast(error.message); renderSessions(); }
@@ -458,7 +479,7 @@ function renderRecentTasks() {
   $('#recentTasks').innerHTML = tasks.slice(0, 30).map(task => `<button class="recent-task ${state.currentTask?.id === task.id ? 'active' : ''}" data-task-id="${esc(task.id)}"><span class="task-state ${esc(task.status)}"></span><span>${esc(task.title)}</span></button>`).join('') || '<div class="empty-helper">Your tasks will show up here.</div>';
 }
 async function loadTask(taskId) {
-  try { const task = await window.code13.getTask(taskId); if (!task) return; state.currentTask = task; state.activity = task.events || []; state.tickets = task.tickets || []; state.currentPlan = null; renderTask(task); renderActivity(); }
+  try { const task = await window.code13.getTask(taskId); if (!task) return; state.currentTask = task; state.activity = task.events || []; state.tickets = task.tickets || []; state.currentPlan = null; state.streaming = null; $('#streamingMessage')?.remove(); renderTask(task); renderActivity(); }
   catch (error) { toast(error.message); }
 }
 
