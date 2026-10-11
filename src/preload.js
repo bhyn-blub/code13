@@ -36,6 +36,13 @@ contextBridge.exposeInMainWorld('code13', {
   updateSkill: (id, updates) => ipcRenderer.invoke('skill:update', id, updates),
   removeSkill: (id) => ipcRenderer.invoke('skill:remove', id),
   toggleSkill: (id, enabled) => ipcRenderer.invoke('skill:toggle', id, enabled),
+  startLSP: (languageId) => ipcRenderer.invoke('lsp:start', languageId),
+  stopLSP: (languageId) => ipcRenderer.invoke('lsp:stop', languageId),
+  lspHover: (languageId, uri, line, character) => ipcRenderer.invoke('lsp:hover', languageId, uri, line, character),
+  lspDefinition: (languageId, uri, line, character) => ipcRenderer.invoke('lsp:definition', languageId, uri, line, character),
+  lspReferences: (languageId, uri, line, character) => ipcRenderer.invoke('lsp:references', languageId, uri, line, character),
+  lspDiagnostics: (languageId, uri) => ipcRenderer.invoke('lsp:diagnostics', languageId, uri),
+  lspFormat: (languageId, uri) => ipcRenderer.invoke('lsp:format', languageId, uri),
   onEvent: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('code13:event', listener);

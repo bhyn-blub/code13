@@ -14,6 +14,7 @@ const { runShell } = require('./lib/shell');
 const { toolInstructions } = require('./lib/prompts');
 const { parseJson, normalizeToolCall } = require('./lib/parse');
 const { startMCPServer, getAllMCPTools, stopMCPServer, getMCPClient } = require('./lib/mcp');
+const { startLSPServer, getLSPClient, stopLSPServer } = require('./lib/lsp');
 const { getMCPServers, getMCPServer, createMCPServer, updateMCPServer, deleteMCPServer, getCustomCommands, getCustomCommand, createCustomCommand, updateCustomCommand, deleteCustomCommand, getSkills, getSkill, createSkill, updateSkill, deleteSkill } = require('./lib/db');
 
 let db;
@@ -476,6 +477,49 @@ ipcMain.handle('skill:remove', (_event, id) => {
 ipcMain.handle('skill:toggle', (_event, id, enabled) => {
   updateSkill(db, id, { enabled });
   return { skills: getSkills(db) };
+});
+
+ipcMain.handle('lsp:start', async (_event, languageId) => {
+  const workspace = getSetting('workspace');
+  if (!workspace || !existsSync(workspace)) throw new Error('Choose a project folder first.');
+  await startLSPServer(languageId, workspace);
+  return { ok: true };
+});
+ipcMain.handle('lsp:stop', async (_event, languageId) => {
+  const workspace = getSetting('workspace');
+  if (!workspace) throw new Error('Choose a project folder first.');
+  await stopLSPServer(languageId, workspace);
+  return { ok: true };
+});
+ipcMain.handle('lsp:hover', async (_event, languageId, uri, line, character) => {
+  const workspace = getSetting('workspace');
+  const client = getLSPClient(languageId, workspace);
+  if (!client) throw new Error(`LSP server for ${languageId} not started.`);
+  return await client.hover(uri, line, character);
+});
+ipcMain.handle('lsp:definition', async (_event, languageId, uri, line, character) => {
+  const workspace = getSetting('workspace');
+  const client = getLSPClient(languageId, workspace);
+  if (!client) throw new Error(`LSP server for ${languageId} not started.`);
+  return await client.definition(uri, line, character);
+});
+ipcMain.handle('lsp:references', async (_event, languageId, uri, line, character) => {
+  const workspace = getSetting('workspace');
+  const client = getLSPClient(languageId, workspace);
+  if (!client) throw new Error(`LSP server for ${languageId} not started.`);
+  return await client.references(uri, line, character);
+});
+ipcMain.handle('lsp:diagnostics', async (_event, languageId, uri) => {
+  const workspace = getSetting('workspace');
+  const client = getLSPClient(languageId, workspace);
+  if (!client) throw new Error(`LSP server for ${languageId} not started.`);
+  return client.getDiagnostics(uri);
+});
+ipcMain.handle('lsp:format', async (_event, languageId, uri) => {
+  const workspace = getSetting('workspace');
+  const client = getLSPClient(languageId, workspace);
+  if (!client) throw new Error(`LSP server for ${languageId} not started.`);
+  return await client.formatting(uri);
 });
 
 ipcMain.handle('task:plan', async (_event, request) => {
