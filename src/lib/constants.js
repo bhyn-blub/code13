@@ -13,7 +13,7 @@ const PROVIDER_LABELS = {
   freellm: 'FreeLLM · local router'
 };
 
-const COORD_TOOLS = ['create_ticket', 'update_ticket', 'assign_ticket', 'ask_user'];
+const COORD_TOOLS = ['create_ticket', 'update_ticket', 'assign_ticket', 'ask_user', 'spawn_subagent'];
 const PROJECT_TOOLS = ['list_files', 'read_file', 'git_status', 'git_diff', 'write_file', 'run_shell'];
 const DEFAULT_TASK_BUDGET = 40;
 const DEFAULT_MAX_STEPS = 24;
@@ -23,7 +23,8 @@ const TOOL_RESULT_LIMIT = 8000;
 const TOOL_LABELS = {
   list_files: 'List files', read_file: 'Read files', git_status: 'Git status', git_diff: 'Git diff',
   write_file: 'Edit files', run_shell: 'Run commands', create_ticket: 'Create ticket',
-  update_ticket: 'Update ticket', assign_ticket: 'Hand off ticket', ask_user: 'Ask the user'
+  update_ticket: 'Update ticket', assign_ticket: 'Hand off ticket', ask_user: 'Ask the user',
+  spawn_subagent: 'Spawn subagent'
 };
 
 const PRESETS = [

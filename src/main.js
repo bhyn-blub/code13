@@ -676,7 +676,91 @@ async function executeCoordTool(tool, args, taskId, workerId) {
     if (!question) throw new Error('ask_user requires a question.');
     return await requestQuestion(taskId, workerId, question);
   }
+  if (tool === 'spawn_subagent') {
+    return await executeSpawnSubagent(args, taskId, workerId);
+  }
   throw new Error(`Unknown coordination tool: ${tool}`);
+}
+
+async function executeSpawnSubagent(args, taskId, parentAgentId) {
+  const goal = String(args.goal || '').trim();
+  if (!goal) throw new Error('spawn_subagent requires a goal.');
+  const agentId = args.agentId ? resolveAgentId(args.agentId) : '';
+  const agents = getAgents().filter(agent => agent.enabled !== false);
+  let subAgent;
+  if (agentId) {
+    subAgent = agents.find(a => a.id === agentId);
+    if (!subAgent) throw new Error(`Agent ${args.agentId} not found or disabled.`);
+  } else {
+    // Use a generic subagent - pick first available or create a minimal one
+    subAgent = agents[0];
+    if (!subAgent) throw new Error('No enabled agents available for subagent.');
+  }
+  const providers = getProviders();
+  const provider = subAgent.provider === 'inherit' ? providers[subAgent.provider] ? subAgent.provider : 'ollama' : subAgent.provider;
+  const model = subAgent.model || (subAgent.provider === 'inherit' ? providers[provider]?.model : providers[subAgent.provider]?.model) || '';
+  if (!model) throw new Error(`${subAgent.name} has no model selected.`);
+  const allowedTools = subAgent.tools.filter(t => PROJECT_TOOLS.includes(t));
+  const role = `${subAgent.instructions}\n\nAgent memory (user-editable local notes):\n${subAgent.memory || '(none)'}`;
+  const memory = readRecentMemory(subAgent.id, 4);
+  const workspace = getSetting('workspace');
+  const board = getTickets(taskId).map(ticket => `${ticket.code} [${ticket.status}] ${ticket.title}${ticket.assignedAgentId ? ` → ${agentName(ticket.assignedAgentId)}` : ''}`);
+  const parentContext = {
+    parentAgentId,
+    goal,
+    workspaceName: path.basename(workspace),
+    ticketBoard: board,
+    institutionalMemory: memory
+  };
+  let subMessages = [
+    { role: 'system', content: toolInstructions(allowedTools, false).replace('{{ROLE}}', role) + '\n\nYou are a subagent with an isolated context. Complete the assigned goal and return a concise final report.' },
+    { role: 'user', content: JSON.stringify({ subagentGoal: goal, parentContext }) }
+  ];
+  const maxSteps = Math.min(8, getMaxSteps());
+  pushEvent(taskId, 'subagent-started', { subAgentId: subAgent.id, parentAgentId, goal });
+  for (let step = 0; step < maxSteps; step++) {
+    if (cancelledTasks.has(taskId)) throw new Error('Task cancelled.');
+    pushEvent(taskId, 'agent-thinking', { agentId: subAgent.id, name: `${subAgent.name} (subagent)` });
+    const output = await callModelBudget(taskId, provider, subMessages, {
+      onChunk: chunk => {
+        if (chunk) pushEvent(taskId, 'chunk', { agentId: subAgent.id, content: String(chunk) });
+      }
+    });
+    subMessages.push({ role: 'assistant', content: output });
+    const parsed = parseJson(output);
+    if (!parsed || parsed.type === 'final' || (!parsed.type && !parsed.name && !parsed.tool && !parsed.tool_name)) {
+      const report = String(parsed?.content || output).slice(0, 8000);
+      pushEvent(taskId, 'subagent-completed', { subAgentId: subAgent.id, parentAgentId, goal, report });
+      return `Subagent ${subAgent.name} completed: ${report}`;
+    }
+    const toolCall = normalizeToolCall(parsed);
+    if (!toolCall) {
+      subMessages.push({ role: 'user', content: 'Malformed tool request. Continue with a valid allowed tool or provide your final report.' });
+      continue;
+    }
+    const isCoord = COORD_TOOLS.includes(toolCall.name);
+    if (!isCoord && !allowedTools.includes(toolCall.name)) {
+      subMessages.push({ role: 'user', content: `Tool request refused: ${toolCall.name} is not allowed for this subagent. Continue with an allowed tool or provide your final report.` });
+      continue;
+    }
+    let toolResult;
+    try {
+      toolResult = await executeTool(workspace, toolCall.name, toolCall.arguments || {}, allowedTools, taskId, subAgent.id, { scheduled: false });
+    } catch (error) {
+      if (cancelledTasks.has(taskId)) throw error;
+      toolResult = `Tool error: ${error.message}`;
+      pushEvent(taskId, 'tool-error', { agentId: subAgent.id, name: subAgent.name, tool: toolCall.name, message: error.message });
+    }
+    subMessages.push({ role: 'user', content: `Tool result for ${toolCall.name}:\n${capToolResult(toolResult)}` });
+    const compacted = compactMessages(subMessages, { maxTokens: CONTEXT_TOKEN_BUDGET });
+    if (compacted.compacted) {
+      subMessages = compacted.messages;
+      pushEvent(taskId, 'context-compacted', { agentId: subAgent.id, name: subAgent.name, tokens: compacted.tokens });
+    }
+  }
+  const report = `Subagent stopped after ${maxSteps} steps.`;
+  pushEvent(taskId, 'subagent-completed', { subAgentId: subAgent.id, parentAgentId, goal, report });
+  return report;
 }
 
 async function requestQuestion(taskId, workerId, question) {
