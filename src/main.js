@@ -212,7 +212,7 @@ function sessionTasks(sessionId) {
 }
 
 async function expandAtFileReferences(workspace, text) {
-  const pattern = /@([^\s/][^\s,;(){}[\]"'`]*|[^\s][^\s]*\/[^\s,;(){}[\]"'`]*)/g;
+  const pattern = /@([^s/][^s,;(){}[]"'`]*|[^s][^s]*\/[^s,;(){}[]"'`]*)/g;
   let result = text;
   let match;
   const seen = new Set();
@@ -230,12 +230,12 @@ async function expandAtFileReferences(workspace, text) {
       if (!stat.isFile()) continue;
       if (stat.size > 500000) continue;
       const content = (await fs.readFile(filePath, 'utf8')).slice(0, 16000);
-      result = result.replace(new RegExp(`@${escapeRegExp(rel)}(?![^\s,;(){}[\]"'\`])`, 'g'), `### @${rel}\n\`\`\`${getCodeFence(content)}\n${content}\n\`\`\``);
+      result = result.replace(new RegExp(`@${escapeRegExp(rel)}(?![^s,;(){}[]"'\`])`, 'g'), `### @${rel}\n\`\`\`${getCodeFence(content)}\n${content}\n\`\`\``);
     } catch { /* ignore missing/unreadable files */ }
   }
   return result;
 }
-function escapeRegExp(value) { return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function escapeRegExp(value) { return String(value).replace(/[.*+?^${}()|[]\]/g, '\\$&'); }
 function getCodeFence(content) { return content.includes('```') ? 'text' : ''; }
 function emitEvent(message) {
   for (const browser of BrowserWindow.getAllWindows()) browser.webContents.send('code13:event', message);
