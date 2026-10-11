@@ -320,3 +320,41 @@ test('bootstrap exposes the max tool-step setting to Settings', async t => {
   const saved = await ipcHandlers.get('settings:save')(null, { maxSteps: 12 });
   assert.equal(saved.maxSteps, 12);
 });
+
+test('tasks are grouped into a session', async t => {
+  const { ipcHandlers } = await readyHarness(t);
+  const boot = await ipcHandlers.get('app:bootstrap')();
+  assert.ok(boot.currentSessionId, 'a default session exists');
+  assert.equal(boot.sessions.length, 1);
+  const plan = await ipcHandlers.get('task:plan')(null, { prompt: 'Fix one bug.', provider: 'openai', model: 'model-x' });
+  const after = await ipcHandlers.get('app:bootstrap')();
+  assert.ok(after.recentTasks.some(task => task.id === plan.id), 'the task appears in the current session');
+  assert.equal(after.sessions.find(session => session.id === after.currentSessionId).taskCount, 1);
+});
+
+test('a new session starts with its own empty task list', async t => {
+  const { ipcHandlers } = await readyHarness(t);
+  const first = await ipcHandlers.get('app:bootstrap')();
+  await ipcHandlers.get('task:plan')(null, { prompt: 'Fix one bug.', provider: 'openai', model: 'model-x' });
+  const created = await ipcHandlers.get('session:create')(null, 'Second');
+  assert.notEqual(created.currentSessionId, first.currentSessionId);
+  assert.equal(created.recentTasks.length, 0, 'the new session starts empty');
+  await ipcHandlers.get('task:plan')(null, { prompt: 'Fix another bug.', provider: 'openai', model: 'model-x' });
+  const switched = await ipcHandlers.get('session:set-current')(null, first.currentSessionId);
+  assert.equal(switched.recentTasks.length, 1, 'each session keeps its own task list');
+});
+
+test('deleting a session removes its finished tasks', async t => {
+  const { ipcHandlers } = await readyHarness(t);
+  const plan = await ipcHandlers.get('task:plan')(null, { prompt: 'Fix one bug.', provider: 'openai', model: 'model-x' });
+  await ipcHandlers.get('task:cancel')(null, plan.id);
+  for (let i = 0; i < 100; i++) {
+    const task = await ipcHandlers.get('task:get')(null, plan.id);
+    if (task && !['planning', 'running', 'awaiting-approval', 'awaiting-route-approval', 'awaiting-route-approval'].includes(task.status) && task.status !== 'cancelled') break; // wait for final state
+    await new Promise(r => setTimeout(r, 5));
+  }
+  const boot = await ipcHandlers.get('app:bootstrap')();
+  await ipcHandlers.get('session:delete')(null, boot.currentSessionId);
+  const after = await ipcHandlers.get('app:bootstrap')();
+  assert.equal(await ipcHandlers.get('task:get')(null, plan.id), null);
+});

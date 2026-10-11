@@ -9,6 +9,7 @@ function openDatabase({ databasePath, presets = [], defaultProviders = {}, defau
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS credentials (provider TEXT PRIMARY KEY, encrypted_value BLOB NOT NULL);
     CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, data TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'manual', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, task_id TEXT, event_type TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -20,6 +21,9 @@ function openDatabase({ databasePath, presets = [], defaultProviders = {}, defau
     CREATE INDEX IF NOT EXISTS idx_tickets_task ON tickets(task_id, created_at);
   `);
   const stamp = new Date().toISOString();
+  const taskColumns = db.prepare('PRAGMA table_info(tasks)').all().map(row => row.name);
+  if (!taskColumns.includes('session_id')) db.exec("ALTER TABLE tasks ADD COLUMN session_id TEXT NOT NULL DEFAULT ''");
+  db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id, created_at)');
   const approvalColumns = db.prepare('PRAGMA table_info(approvals)').all().map(row => row.name);
   if (!approvalColumns.includes('response_text')) db.exec('ALTER TABLE approvals ADD COLUMN response_text TEXT');
   if (!db.prepare("SELECT value FROM settings WHERE key='task_budget'").get()) {

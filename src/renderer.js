@@ -1,6 +1,6 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const state = { workspace: '', providers: {}, providerReady: {}, providerStatus: {}, models: {}, modelChoice: {}, modelError: {}, router: {}, providerOrder: ['ollama', 'openai', 'anthropic', 'freellm'], providerLabels: {}, toolLabels: {}, agents: [], tasks: [], currentTask: null, currentPlan: null, approvals: [], activity: [], tickets: [], agentStatuses: {}, agentTickets: {}, busy: false, editingAgent: null, activeSettingsTab: 'providers', taskBudget: 40, maxSteps: 24, localProviders: ['ollama'], settingsDirty: false };
+const state = { workspace: '', providers: {}, providerReady: {}, providerStatus: {}, models: {}, modelChoice: {}, modelError: {}, router: {}, providerOrder: ['ollama', 'openai', 'anthropic', 'freellm'], providerLabels: {}, toolLabels: {}, agents: [], tasks: [], currentTask: null, currentPlan: null, approvals: [], activity: [], tickets: [], agentStatuses: {}, agentTickets: {}, busy: false, editingAgent: null, activeSettingsTab: 'providers', taskBudget: 40, maxSteps: 24, localProviders: ['ollama'], settingsDirty: false, sessions: [], currentSessionId: '' };
 let TOOL_LABELS = {};
 
 function esc(value = '') { return String(value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch])); }
@@ -39,6 +39,8 @@ function init() {
   $('#routeProvider').addEventListener('change', onProviderChange);
   $('#routeModel').addEventListener('change', () => { state.modelChoice[activeProvider()] = $('#routeModel').value; updateProviderChrome(); });
   $('#routeModelRefresh').addEventListener('click', async () => { await ensureModels(activeProvider(), true); updateProviderChrome(); });
+  $('#sessionSelect').addEventListener('change', switchSession);
+  $('#newSessionButton').addEventListener('click', createNewSession);
   document.addEventListener('click', event => {
     const close = event.target.closest('[data-close]');
     if (close) closeModals();
@@ -89,7 +91,8 @@ async function bootstrap() {
     TOOL_LABELS = result.toolLabels || TOOL_LABELS;
     state.activity = result.currentTask?.events || [];
     state.tickets = result.currentTask?.tickets || [];
-    updateWorkspace(); updateProviderChrome(); renderTeam(); renderRecentTasks(); renderActivity(); renderApprovals(); renderTickets();
+    state.tasks = result.recentTasks || [];
+    updateWorkspace(); updateProviderChrome(); renderTeam(); renderSessions(); renderRecentTasks(); renderActivity(); renderApprovals(); renderTickets();
     if (result.currentTask) { state.currentTask = result.currentTask; renderTask(result.currentTask); }
     else setEmpty(true);
     onProviderChange();
@@ -204,6 +207,8 @@ async function submitPrompt(event) {
     const plan = await window.code13.createPlan({ prompt, provider: activeProvider(), model: currentModel(activeProvider()) });
     state.currentTask = { id: plan.id, title: plan.title, status: 'awaiting-route-approval', messages: [{ role: 'user', content: prompt }], events: [] };
     state.currentPlan = plan; $('#promptInput').value = ''; renderTask(state.currentTask); renderRoute(plan); renderRecentTasks();
+    const session = (state.sessions || []).find(item => item.id === state.currentSessionId);
+    if (session) { session.taskCount += 1; if (session.title === 'New session') session.title = plan.title.slice(0, 60); renderSessions(); }
   } catch (error) {
     const needsSettings = /model|provider|settings|api key|reachable|router/i.test(error.message);
     toast(needsSettings ? `${error.message} — opening Settings.` : error.message);
@@ -356,6 +361,38 @@ function renderActivity() {
   }).join('');
 }
 function formatTime(value) { if (!value) return 'just now'; const date = new Date(value); return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
+function renderSessions() {
+  const select = $('#sessionSelect');
+  if (!select) return;
+  const sessions = state.sessions || [];
+  select.innerHTML = sessions.map(session => `<option value="${esc(session.id)}">${esc(session.title)} · ${session.taskCount}</option>`).join('') || '<option value="">No sessions</option>';
+  select.value = state.currentSessionId || '';
+  $('#sessionCount').textContent = sessions.length;
+}
+async function switchSession() {
+  const id = $('#sessionSelect').value;
+  if (!id || id === state.currentSessionId) return;
+  try {
+    const result = await window.code13.setCurrentSession(id);
+    state.currentSessionId = result.currentSessionId;
+    state.sessions = result.sessions || state.sessions;
+    state.tasks = result.recentTasks || [];
+    state.currentTask = null; state.currentPlan = null; state.activity = []; state.tickets = []; state.approvals = [];
+    $('#messages').innerHTML = ''; $('#routePanel').classList.add('hidden'); $('#approvalPanel').innerHTML = '';
+    renderSessions(); renderRecentTasks(); renderActivity(); renderTickets(); setEmpty(true);
+  } catch (error) { toast(error.message); renderSessions(); }
+}
+async function createNewSession() {
+  try {
+    const result = await window.code13.createSession();
+    state.sessions = result.sessions || [];
+    state.currentSessionId = result.currentSessionId;
+    state.tasks = result.recentTasks || [];
+    newTask();
+    renderSessions(); renderRecentTasks();
+    toast('New session started.');
+  } catch (error) { toast(error.message); }
+}
 function renderRecentTasks() {
   const tasks = [...state.tasks];
   if (state.currentTask && !tasks.some(task => task.id === state.currentTask.id)) tasks.unshift({ id: state.currentTask.id, title: state.currentTask.title, status: state.currentTask.status, createdAt: new Date().toISOString() });

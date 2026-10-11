@@ -2,6 +2,11 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('code13', {
   bootstrap: () => ipcRenderer.invoke('app:bootstrap'),
+  listSessions: () => ipcRenderer.invoke('session:list'),
+  createSession: (title) => ipcRenderer.invoke('session:create', title),
+  setCurrentSession: (id) => ipcRenderer.invoke('session:set-current', id),
+  renameSession: (id, title) => ipcRenderer.invoke('session:rename', id, title),
+  deleteSession: (id) => ipcRenderer.invoke('session:delete', id),
   selectWorkspace: () => ipcRenderer.invoke('workspace:select'),
   saveSettings: (data) => ipcRenderer.invoke('settings:save', data),
   testProvider: (provider) => ipcRenderer.invoke('provider:test', provider),

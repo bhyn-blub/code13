@@ -27,6 +27,18 @@ function makeId() { return randomUUID(); }
 function initDb() {
   const databasePath = path.join(app.getPath('userData'), 'code13.sqlite');
   db = openDatabase({ databasePath, presets: PRESETS, defaultProviders: DEFAULT_PROVIDERS, defaultTaskBudget: DEFAULT_TASK_BUDGET });
+  backfillSessions();
+}
+// Give pre-session tasks a home so history is not lost on upgrade.
+function backfillSessions() {
+  const anySession = db.prepare('SELECT id FROM sessions LIMIT 1').get();
+  const orphans = db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE session_id IS NULL OR session_id=''").get().n;
+  if (orphans && !anySession) {
+    const id = makeId();
+    const stamp = now();
+    db.prepare('INSERT INTO sessions(id,title,created_at,updated_at) VALUES(?,?,?,?)').run(id, 'Earlier tasks', stamp, stamp);
+    db.prepare("UPDATE tasks SET session_id=? WHERE session_id IS NULL OR session_id=''").run(id);
+  }
 }
 
 function getSetting(key, fallback = '') {
@@ -171,6 +183,33 @@ function getTaskSummary(taskId) {
   if (!task) return null;
   return { ...task, messages: getMessages(taskId), events: getEvents(taskId), tickets: getTickets(taskId) };
 }
+function getSessions() {
+  return db.prepare('SELECT id,title,created_at AS createdAt,updated_at AS updatedAt FROM sessions ORDER BY updated_at DESC').all()
+    .map(session => ({ ...session, taskCount: db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE session_id=?').get(session.id).n }));
+}
+function createSession(title = 'New session') {
+  const id = makeId();
+  const stamp = now();
+  const safeTitle = String(title || '').trim().slice(0, 120) || 'New session';
+  db.prepare('INSERT INTO sessions(id,title,created_at,updated_at) VALUES(?,?,?,?)').run(id, safeTitle, stamp, stamp);
+  return { id, title: safeTitle, createdAt: stamp, updatedAt: stamp, taskCount: 0 };
+}
+function touchSession(sessionId, title) {
+  const stamp = now();
+  db.prepare('UPDATE sessions SET updated_at=?, title=COALESCE(?,title) WHERE id=?').run(stamp, title ? String(title).trim().slice(0, 120) : null, sessionId);
+}
+function activeSessionId() {
+  const id = getSetting('active_session');
+  if (id && db.prepare('SELECT id FROM sessions WHERE id=?').get(id)) return id;
+  const newest = db.prepare('SELECT id FROM sessions ORDER BY updated_at DESC LIMIT 1').get();
+  if (newest) { setSetting('active_session', newest.id); return newest.id; }
+  const created = createSession('New session');
+  setSetting('active_session', created.id);
+  return created.id;
+}
+function sessionTasks(sessionId) {
+  return db.prepare('SELECT id,title,status,mode,created_at AS createdAt FROM tasks WHERE session_id=? ORDER BY created_at DESC LIMIT 20').all(sessionId);
+}
 function emitEvent(message) {
   for (const browser of BrowserWindow.getAllWindows()) browser.webContents.send('code13:event', message);
   return message;
@@ -214,17 +253,60 @@ function localRoute(prompt, agents) {
 ipcMain.handle('app:bootstrap', () => {
   const providers = getProviders();
   const agents = getAgents();
-  const recentTasks = db.prepare('SELECT id,title,status,mode,created_at AS createdAt FROM tasks ORDER BY created_at DESC LIMIT 20').all();
-  const currentTask = recentTasks.find(task => ['awaiting-approval', 'awaiting-route-approval', 'running'].includes(task.status)) || null;
+  const currentSessionId = activeSessionId();
+  const recentTasks = sessionTasks(currentSessionId);
+  const currentTask = db.prepare('SELECT id,status FROM tasks ORDER BY created_at DESC LIMIT 50').all().find(task => ['awaiting-approval', 'awaiting-route-approval', 'running'].includes(task.status)) || null;
   return {
     workspace: getSetting('workspace'), providers, localProviders: LOCAL_PROVIDERS, taskBudget: getTaskBudget(), maxSteps: getMaxSteps(),
     providerOrder: PROVIDERS, providerLabels: PROVIDER_LABELS, toolLabels: TOOL_LABELS,
     providerReady: providerReadyMap(),
     providerStatus: providerStatusMap(),
     models: cachedModelsMap(),
-    agents, recentTasks, currentTask: currentTask ? getTaskSummary(currentTask.id) : null,
+    sessions: getSessions(), currentSessionId, recentTasks, agents,
+    currentTask: currentTask ? getTaskSummary(currentTask.id) : null,
     pendingApprovals: listPendingApprovals(), secureStorageAvailable: safeStorage.isEncryptionAvailable()
   };
+});
+
+ipcMain.handle('session:list', () => ({ sessions: getSessions(), currentSessionId: activeSessionId() }));
+
+ipcMain.handle('session:create', (_event, title) => {
+  const session = createSession(title || 'New session');
+  setSetting('active_session', session.id);
+  return { session, sessions: getSessions(), currentSessionId: session.id, recentTasks: sessionTasks(session.id) };
+});
+
+ipcMain.handle('session:set-current', (_event, id) => {
+  if (!id || !db.prepare('SELECT id FROM sessions WHERE id=?').get(id)) throw new Error('Session not found.');
+  setSetting('active_session', id);
+  return { currentSessionId: id, recentTasks: sessionTasks(id), sessions: getSessions() };
+});
+
+ipcMain.handle('session:rename', (_event, id, title) => {
+  const safeTitle = String(title || '').trim().slice(0, 120);
+  if (!safeTitle) throw new Error('Session title cannot be empty.');
+  if (!db.prepare('SELECT id FROM sessions WHERE id=?').get(id)) throw new Error('Session not found.');
+  touchSession(id, safeTitle);
+  return { sessions: getSessions() };
+});
+
+ipcMain.handle('session:delete', (_event, id) => {
+  if (!db.prepare('SELECT id FROM sessions WHERE id=?').get(id)) throw new Error('Session not found.');
+  const taskIds = db.prepare('SELECT id,status FROM tasks WHERE session_id=?').all(id);
+  if (taskIds.some(task => ['planning', 'running', 'awaiting-approval', 'awaiting-route-approval'].includes(task.status))) {
+    throw new Error('Finish or cancel running tasks in this session before deleting it.');
+  }
+  for (const task of taskIds) {
+    db.prepare('DELETE FROM messages WHERE task_id=?').run(task.id);
+    db.prepare('DELETE FROM events WHERE task_id=?').run(task.id);
+    db.prepare('DELETE FROM tickets WHERE task_id=?').run(task.id);
+    db.prepare('DELETE FROM approvals WHERE task_id=?').run(task.id);
+    db.prepare('DELETE FROM tasks WHERE id=?').run(task.id);
+  }
+  db.prepare('DELETE FROM sessions WHERE id=?').run(id);
+  if (getSetting('active_session') === id) setSetting('active_session', '');
+  const currentSessionId = activeSessionId();
+  return { sessions: getSessions(), currentSessionId, recentTasks: sessionTasks(currentSessionId) };
 });
 
 ipcMain.handle('workspace:select', async () => {
@@ -305,7 +387,10 @@ ipcMain.handle('task:plan', async (_event, request) => {
   if (!agents.length) throw new Error('Enable at least one agent in the team workspace.');
   const id = makeId();
   const title = prompt.slice(0, 100);
-  db.prepare('INSERT INTO tasks(id,title,status,mode,created_at,updated_at) VALUES(?,?,?,?,?,?)').run(id, title, 'planning', 'manual', now(), now());
+  const sessionId = activeSessionId();
+  db.prepare('INSERT INTO tasks(id,title,status,mode,session_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?)').run(id, title, 'planning', 'manual', sessionId, now(), now());
+  const session = db.prepare('SELECT title FROM sessions WHERE id=?').get(sessionId);
+  touchSession(sessionId, !session || session.title === 'New session' ? title.slice(0, 60) : null);
   saveMessage(id, 'user', prompt);
   const context = { workspace, provider, model, providers: { [provider]: providers[provider] }, agents: agents.map(({ id: agentId, name, description, tools: allowedTools, provider: agentProvider, model: agentModel }) => ({ id: agentId, name, description, tools: allowedTools, provider: agentProvider === 'inherit' ? provider : agentProvider, model: agentModel || (agentProvider === 'inherit' ? model : providers[agentProvider]?.model || '') })) };
   let chosenIds;
@@ -389,6 +474,7 @@ ipcMain.handle('task:cancel', (_event, taskId) => {
   }
   db.prepare("UPDATE approvals SET status='rejected',decided_at=? WHERE task_id=? AND status='pending'").run(now(), taskId);
   setTaskStatus(taskId, 'cancelled');
+  db.prepare('UPDATE tasks SET status=?,updated_at=? WHERE id=?').run('cancelled', now(), taskId);
   return true;
 });
 
@@ -694,7 +780,7 @@ async function runDueSchedules() {
     db.prepare('UPDATE agents SET data=?,updated_at=? WHERE id=?').run(JSON.stringify(agent), now(), agent.id);
     const id = makeId();
     const prompt = agent.schedule.prompt || 'Review the current workspace for relevant changes and report concise findings.';
-    db.prepare('INSERT INTO tasks(id,title,status,mode,created_at,updated_at) VALUES(?,?,?,?,?,?)').run(id, `[Scheduled] ${agent.name}: ${prompt.slice(0, 70)}`, 'running', 'scheduled', now(), now());
+    db.prepare('INSERT INTO tasks(id,title,status,mode,session_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?)').run(id, `[Scheduled] ${agent.name}: ${prompt.slice(0, 70)}`, 'running', 'scheduled', activeSessionId(), now(), now());
     saveMessage(id, 'user', prompt);
     pushEvent(id, 'schedule-started', { agentId: agent.id, name: agent.name, nextRunAt });
     taskState.set(id, { budget: getTaskBudget(), modelCalls: 0, handoffs: [], runs: 0, abort: new AbortController() });
