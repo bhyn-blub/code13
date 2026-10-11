@@ -58,9 +58,22 @@ function saveCredential(provider, value) {
   const encrypted = safeStorage.encryptString(value);
   db.prepare('INSERT INTO credentials(provider,encrypted_value) VALUES(?,?) ON CONFLICT(provider) DO UPDATE SET encrypted_value=excluded.encrypted_value').run(provider, encrypted);
 }
+// Explain why a provider can or cannot be used, so the UI can guide setup.
+function providerReadiness(provider, providers = getProviders()) {
+  const config = providers[provider] || {};
+  if (provider !== 'ollama' && !credentialConfigured(provider)) return { ready: false, reason: 'no-key' };
+  if (!String(config.model || '').trim()) return { ready: false, reason: 'no-model' };
+  return { ready: true, reason: 'ready' };
+}
+function providerReadyMap() {
+  return Object.fromEntries(PROVIDERS.map(provider => [provider, providerReadiness(provider).ready]));
+}
+function providerStatusMap() {
+  return Object.fromEntries(PROVIDERS.map(provider => [provider, providerReadiness(provider)]));
+}
 
 const modelClient = createModelClient({ getProviders, getCredential });
-const { callModel, listModels, testProvider } = modelClient;
+const { callModel, listModels, testProvider, ping } = modelClient;
 
 function listPendingApprovals() {
   return db.prepare("SELECT id,task_id,worker_id,action,payload,created_at FROM approvals WHERE status='pending' ORDER BY created_at").all().map(row => ({
@@ -169,7 +182,8 @@ ipcMain.handle('app:bootstrap', () => {
   return {
     workspace: getSetting('workspace'), providers, localProviders: LOCAL_PROVIDERS, taskBudget: getTaskBudget(),
     providerOrder: PROVIDERS, providerLabels: PROVIDER_LABELS, toolLabels: TOOL_LABELS,
-    providerReady: Object.fromEntries(PROVIDERS.map(provider => [provider, provider === 'ollama' || credentialConfigured(provider)])),
+    providerReady: providerReadyMap(),
+    providerStatus: providerStatusMap(),
     agents, recentTasks, currentTask: currentTask ? getTaskSummary(currentTask.id) : null,
     pendingApprovals: listPendingApprovals(), secureStorageAvailable: safeStorage.isEncryptionAvailable()
   };
@@ -200,11 +214,12 @@ ipcMain.handle('settings:save', (_event, data) => {
     const budget = Math.max(5, Math.min(500, Number(data.taskBudget) || DEFAULT_TASK_BUDGET));
     setSetting('task_budget', String(budget));
   }
-  return { providers, providerReady: Object.fromEntries(PROVIDERS.map(provider => [provider, provider === 'ollama' || credentialConfigured(provider)])), taskBudget: getTaskBudget() };
+  return { providers, providerReady: providerReadyMap(), providerStatus: providerStatusMap(), taskBudget: getTaskBudget() };
 });
 
 ipcMain.handle('provider:test', async (_event, provider) => ({ provider, models: await testProvider(provider) }));
 ipcMain.handle('provider:models', async (_event, provider) => await listModels(provider));
+ipcMain.handle('provider:ping', async (_event, provider) => ({ provider, ...(await ping(provider)) }));
 
 ipcMain.handle('agent:save', (_event, agent) => {
   const oldAgent = getAgents().find(item => item.id === agent.id);
@@ -289,9 +304,10 @@ ipcMain.handle('task:plan', async (_event, request) => {
     return !(agent.model || (agent.provider === 'inherit' ? model : providers[agentProvider]?.model || ''));
   });
   if (missingModel) {
+    const missingProvider = missingModel.provider === 'inherit' ? provider : missingModel.provider;
     db.prepare('DELETE FROM messages WHERE task_id=?').run(id);
     db.prepare('DELETE FROM tasks WHERE id=?').run(id);
-    throw new Error(`Choose a model for ${missingModel.name} or configure a provider default in Settings.`);
+    throw new Error(`Choose a model for ${missingModel.name} (${missingProvider}) in Settings before starting.`);
   }
   destination = destinationForProviders(plannedProviders);
   const plan = { id, title, prompt, workspace, provider: routedProvider, model: routedModel, destination, reason: rationale, steps: selected.map(agent => { const agentProvider = agent.provider === 'inherit' ? routedProvider : agent.provider; return { agentId: agent.id, name: agent.name, provider: agentProvider, model: agent.model || (agent.provider === 'inherit' ? routedModel : providers[agentProvider]?.model || ''), tools: agent.tools }; }) };

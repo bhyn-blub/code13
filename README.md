@@ -26,7 +26,7 @@ The portable app folder is written to `release/win-unpacked`. To create an NSIS 
 - **Ollama (local)** — default at `http://localhost:11434`. `qwen2.5-coder:7b` is the recommended model; it produces more reliable structured tool output than small general models.
 - **OpenAI API** — hosted; keys stored in Windows secure storage.
 - **Anthropic API** — hosted; keys stored in Windows secure storage.
-- **FreeLLM (local router)** — connects to the separate open-source [FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi) router on this machine (default `http://localhost:3001/v1`). Install it, add free provider keys (Google, Groq, and others) on its dashboard, then paste the unified key into Code 13. Requests go to your local router, which forwards to free hosted model tiers.
+- **FreeLLM (local router)** — connects to the separate open-source [FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi) router on this machine (default `http://localhost:3001/v1`). Install it, add free provider keys (Google, Groq, and others) on its dashboard, then paste the unified key into Code 13. Requests go to your local router, which forwards to free hosted model tiers. See **[SETUP-FREELLM.md](SETUP-FREELLM.md)** for the full walkthrough, including a **Check router** button and plain-language connection errors.
 
 ## What works
 
@@ -41,6 +41,7 @@ The portable app folder is written to `release/win-unpacked`. To create an NSIS 
 - Local SQLite event history, Windows secure storage for provider credentials, and editable agent memory notes.
 - Recurring read-only checks while the app is open. Writes and commands stay in a durable approval queue.
 - Provider errors are shown directly; Code 13 does not silently switch providers.
+- **Setup diagnostics.** Settings shows why a provider is not ready (no key, no model), a **Check router** button for FreeLLM, and connection failures are written in plain language (for example, "FreeLLMAPI router not reachable at http://localhost:3001/v1"). A failed chat submit opens Settings automatically without clearing your prompt.
 - If a restart interrupts a worker while an approval or question is pending, it survives and can still be handled. Afterward the task is marked **Needs attention** with a message to start a new task; the interrupted model run does not resume automatically.
 - **Cancellation takes effect immediately.** Cancelling a task aborts the in-flight model request, not just the next step.
 - **Approving a route is idempotent.** A repeated approval (for example, a double click) is ignored instead of starting a second orchestration loop.
@@ -75,4 +76,4 @@ npm run format    # Prettier (opt-in; the shipped files use a compact style)
 npm test
 ```
 
-The test suite covers provider streams and errors, FreeLLM routing, route/privacy behavior, workspace path checks, approved file writes and shell commands, restart-persistent approvals, Builder/Reviewer sequencing, ticket creation, agent handoffs, the Ask-me round trip, the circuit breaker, restart-persistent questions, model-output parsing, secret-file and VCS-internal policy (including `git_diff` filtering and token redaction), recoverable tool errors, cancelling a task that is awaiting approval, shell-risk assessment, scheduled read-only permissions, and the extracted Git/shell/workspace tool modules.
+The test suite covers provider streams and errors, provider reachability/readiness diagnostics, FreeLLM routing end-to-end, route/privacy behavior, workspace path checks, approved file writes and shell commands, restart-persistent approvals, Builder/Reviewer sequencing, ticket creation, agent handoffs, the Ask-me round trip, the circuit breaker, restart-persistent questions, model-output parsing, secret-file and VCS-internal policy (including `git_diff` filtering and token redaction), recoverable tool errors, cancelling a task that is awaiting approval, shell-risk assessment, scheduled read-only permissions, and the extracted Git/shell/workspace tool modules.

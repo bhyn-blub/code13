@@ -1,6 +1,6 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const state = { workspace: '', providers: {}, providerReady: {}, providerOrder: ['ollama', 'openai', 'anthropic', 'freellm'], providerLabels: {}, toolLabels: {}, agents: [], tasks: [], currentTask: null, currentPlan: null, approvals: [], activity: [], tickets: [], agentStatuses: {}, agentTickets: {}, busy: false, editingAgent: null, activeSettingsTab: 'providers', taskBudget: 40, localProviders: ['ollama'], settingsDirty: false };
+const state = { workspace: '', providers: {}, providerReady: {}, providerStatus: {}, providerOrder: ['ollama', 'openai', 'anthropic', 'freellm'], providerLabels: {}, toolLabels: {}, agents: [], tasks: [], currentTask: null, currentPlan: null, approvals: [], activity: [], tickets: [], agentStatuses: {}, agentTickets: {}, busy: false, editingAgent: null, activeSettingsTab: 'providers', taskBudget: 40, localProviders: ['ollama'], settingsDirty: false };
 let TOOL_LABELS = {};
 
 function esc(value = '') { return String(value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch])); }
@@ -13,6 +13,17 @@ function providerDestination(provider, model) {
   return `Task context will be sent to ${providerLabel(provider)}${model ? ` · ${model}` : ''}.`;
 }
 function activeProvider() { return $('#routeProvider').value || 'ollama'; }
+function readinessText(provider, ready) {
+  const status = (state.providerStatus || {})[provider];
+  const local = (state.localProviders || []).includes(provider);
+  if (status) {
+    if (status.reason === 'ready') return local ? 'Local provider' : 'Key stored securely';
+    if (status.reason === 'no-model') return 'Add a model';
+    if (status.reason === 'no-key') return 'Add an API key';
+  }
+  if (provider === 'freellm') return ready ? 'Add a model' : 'Add the unified key';
+  return ready ? (local ? 'Local provider' : 'Key stored securely') : 'Not configured';
+}
 
 function init() {
   $('#composer').addEventListener('submit', submitPrompt);
@@ -55,6 +66,8 @@ function init() {
   $('#settingsBody').addEventListener('click', async event => {
     const test = event.target.closest('[data-test-provider]');
     if (test) await testProvider(test.dataset.testProvider);
+    const ping = event.target.closest('[data-ping-provider]');
+    if (ping) await checkProvider(ping.dataset.pingProvider);
     const models = event.target.closest('[data-load-models]');
     if (models) await loadModels(models.dataset.loadModels);
     if (event.target.closest('#pickWorkspace')) await selectWorkspace();
@@ -128,8 +141,9 @@ async function submitPrompt(event) {
     state.currentTask = { id: plan.id, title: plan.title, status: 'awaiting-route-approval', messages: [{ role: 'user', content: prompt }], events: [] };
     state.currentPlan = plan; $('#promptInput').value = ''; renderTask(state.currentTask); renderRoute(plan); renderRecentTasks();
   } catch (error) {
-    const needsSave = /model|provider|settings/i.test(error.message);
-    toast(needsSave ? `${error.message} — open Settings and click "Save settings".` : error.message);
+    const needsSettings = /model|provider|settings|api key|reachable|router/i.test(error.message);
+    toast(needsSettings ? `${error.message} — opening Settings.` : error.message);
+    if (needsSettings) openModal('settings');
     setEmpty(!state.currentTask);
   }
   finally { state.busy = false; $('#sendButton').disabled = false; $('#typingIndicator').classList.add('hidden'); }
@@ -308,7 +322,7 @@ function renderSettings() {
       const isRouter = provider === 'freellm';
       const ready = state.providerReady[provider];
       const badge = isRouter ? 'LOCAL ROUTER' : (local ? 'LOCAL' : 'HOSTED');
-      return `<article class="provider-card" data-provider-card="${provider}"><div class="provider-card-head"><strong>${esc(providerLabel(provider))}</strong><span class="provider-badge ${isRouter ? 'router' : (local ? '' : 'remote')}">${badge}</span></div><div class="form-grid"><div class="field"><label>Model</label><input data-model="${provider}" value="${esc(config.model || '')}" placeholder="${provider === 'ollama' ? 'e.g. qwen2.5-coder:7b' : provider === 'freellm' ? 'e.g. google/gemini-2.0-flash-001:free' : 'Model name'}" /></div><div class="field"><label>${local ? 'Ollama address' : (isRouter ? 'Unified API key' : 'API key')}</label><input data-${local ? 'url' : 'key'}="${provider}" type="${local ? 'url' : 'password'}" value="${local ? esc(config.baseUrl || '') : ''}" placeholder="${local ? 'http://localhost:11434' : (isRouter ? 'Paste the unified key from your FreeLLM dashboard' : ready ? 'Saved securely · enter to replace' : 'Paste provider API key')}" autocomplete="off" /></div></div>${!local ? `<div class="field"><label>API base URL</label><input data-url="${provider}" type="url" value="${esc(config.baseUrl || '')}" placeholder="${isRouter ? 'http://localhost:3001/v1' : ''}" /></div>` : ''}<div class="settings-actions"><button class="small-button" data-test-provider="${provider}">Test connection</button><button class="small-button" data-load-models="${provider}">Load models</button><span class="settings-result" id="providerResult-${provider}">${ready ? (local ? 'Local provider' : 'Key stored securely') : 'Not configured'}</span></div>${isRouter ? '<p class="settings-note">FreeLLMAPI is a separate open-source local router installed on this machine. Add free provider keys on its dashboard (freellmapi.co), then paste its unified key here. Code 13 sends requests to your local router, which forwards to free hosted model tiers.</p>' : ''}</article>`;
+      return `<article class="provider-card" data-provider-card="${provider}"><div class="provider-card-head"><strong>${esc(providerLabel(provider))}</strong><span class="provider-badge ${isRouter ? 'router' : (local ? '' : 'remote')}">${badge}</span></div><div class="form-grid"><div class="field"><label>Model</label><input data-model="${provider}" value="${esc(config.model || '')}" placeholder="${provider === 'ollama' ? 'e.g. qwen2.5-coder:7b' : provider === 'freellm' ? 'e.g. google/gemini-2.0-flash-001:free' : 'Model name'}" /></div><div class="field"><label>${local ? 'Ollama address' : (isRouter ? 'Unified API key' : 'API key')}</label><input data-${local ? 'url' : 'key'}="${provider}" type="${local ? 'url' : 'password'}" value="${local ? esc(config.baseUrl || '') : ''}" placeholder="${local ? 'http://localhost:11434' : (isRouter ? 'Paste the unified key from your FreeLLM dashboard' : ready ? 'Saved securely · enter to replace' : 'Paste provider API key')}" autocomplete="off" /></div></div>${!local ? `<div class="field"><label>API base URL</label><input data-url="${provider}" type="url" value="${esc(config.baseUrl || '')}" placeholder="${isRouter ? 'http://localhost:3001/v1' : ''}" /></div>` : ''}<div class="settings-actions">${isRouter ? `<button class="small-button" data-ping-provider="${provider}">Check router</button>` : ''}<button class="small-button" data-test-provider="${provider}">Test connection</button><button class="small-button" data-load-models="${provider}">Load models</button><span class="settings-result" id="providerResult-${provider}">${readinessText(provider, ready)}</span></div>${isRouter ? '<p class="settings-note">FreeLLMAPI is a separate open-source local router installed on this machine. Add free provider keys on its dashboard (freellmapi.co), then paste its unified key here. Code 13 sends requests to your local router, which forwards to free hosted model tiers.</p>' : ''}</article>`;
     }).join('') + `<div class="privacy-row"><strong>Task model-call budget</strong><p>Pauses a task before it spends more than this many model calls. A paused task is marked Needs attention; start a new task after raising the budget.</p></div><div class="form-grid"><div class="field"><label>Budget per task</label><input data-budget type="number" min="5" max="500" value="${esc(String(state.taskBudget || 40))}" /></div></div><p class="settings-note">Hosted providers receive the task and context needed to answer when you approve a route. API keys are stored with Windows secure storage and never written to activity logs.</p>`;
   } else if (state.activeSettingsTab === 'workspace') {
     body.innerHTML = `<div class="workspace-picker"><div><div class="field"><label>Active project folder</label><strong>${esc(state.workspace || 'No project selected')}</strong></div></div><button id="pickWorkspace" class="secondary-button">Choose folder</button></div><p class="settings-note">File access is limited to this project folder. Code 13 ignores dependency/build folders and follows no symbolic links while browsing.</p>`;
@@ -335,8 +349,18 @@ async function saveSettings() {
   const budget = Number($('[data-budget]')?.value);
   if (Number.isFinite(budget) && budget > 0) data.taskBudget = budget;
   $('#settingsMessage').textContent = 'Saving…';
-  try { const result = await window.code13.saveSettings(data); state.providers = result.providers; state.providerReady = result.providerReady; state.taskBudget = result.taskBudget ?? state.taskBudget; state.settingsDirty = false; updateSaveButton(); updateProviderChrome(); renderTeam(); $('#settingsMessage').textContent = 'Settings saved locally.'; toast('Provider settings saved.'); setTimeout(() => { $('#settingsMessage').textContent = ''; }, 1800); }
+  try { const result = await window.code13.saveSettings(data); state.providers = result.providers; state.providerReady = result.providerReady; state.providerStatus = result.providerStatus || state.providerStatus; state.taskBudget = result.taskBudget ?? state.taskBudget; state.settingsDirty = false; updateSaveButton(); updateProviderChrome(); renderTeam(); $('#settingsMessage').textContent = 'Settings saved locally.'; toast('Provider settings saved.'); setTimeout(() => { $('#settingsMessage').textContent = ''; }, 1800); }
   catch (error) { $('#settingsMessage').textContent = error.message; }
+}
+async function checkProvider(provider) {
+  const result = $(`#providerResult-${provider}`); result.textContent = 'Checking…';
+  try {
+    const status = await window.code13.pingProvider(provider);
+    if (status.ok) result.textContent = `Router reachable · ${status.models.length} model${status.models.length === 1 ? '' : 's'}`;
+    else if (status.reachable) result.textContent = status.error || `Reachable (HTTP ${status.status})`;
+    else result.textContent = status.error || 'Not reachable';
+    toast(status.ok ? `${providerLabel(provider)} reachable.` : (status.error || 'Not reachable'));
+  } catch (error) { result.textContent = error.message; }
 }
 async function testProvider(provider) {
   const result = $(`#providerResult-${provider}`); result.textContent = 'Connecting…';
@@ -348,7 +372,7 @@ async function loadModels(provider) {
   try {
     const models = await window.code13.listProviderModels(provider);
     const input = $(`[data-model="${provider}"]`);
-    if (models.length) { let datalist = $(`#models-${provider}`); if (!datalist) { datalist = document.createElement('datalist'); datalist.id = `models-${provider}`; document.body.append(datalist); input.setAttribute('list', datalist.id); } datalist.innerHTML = models.map(model => `<option value="${esc(model)}"></option>`).join(''); }
+    if (models.length) { if (!input.value.trim()) input.value = models[0]; let datalist = $(`#models-${provider}`); if (!datalist) { datalist = document.createElement('datalist'); datalist.id = `models-${provider}`; document.body.append(datalist); input.setAttribute('list', datalist.id); } datalist.innerHTML = models.map(model => `<option value="${esc(model)}"></option>`).join(''); }
     result.textContent = `${models.length} models available.`;
   } catch (error) { result.textContent = error.message; }
 }

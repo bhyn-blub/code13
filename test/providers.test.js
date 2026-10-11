@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { streamProvider } = require('../src/lib/providers');
+const { streamProvider, pingProvider } = require('../src/lib/providers');
 
 function response(body, status = 200) { return new Response(body, { status, headers: { 'content-type': 'text/event-stream' } }); }
 function stream(text) { return new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode(text)); controller.close(); } }); }
@@ -56,4 +56,29 @@ test('FreeLLM uses the OpenAI-compatible path against its local router', async (
 
 test('FreeLLM still requires a unified key', async () => {
   await assert.rejects(streamProvider('freellm', [], { config: { baseUrl: 'http://localhost:3001/v1', model: 'auto' } }), /API key/);
+});
+
+test('connection failures become actionable messages per provider', async () => {
+  const refused = async () => { const error = new TypeError('fetch failed'); error.cause = { code: 'ECONNREFUSED' }; throw error; };
+  await assert.rejects(streamProvider('freellm', [], { config: { baseUrl: 'http://localhost:3001/v1' , model: 'auto' }, key: 'k', fetchImpl: refused }), /FreeLLMAPI router not reachable/);
+  await assert.rejects(streamProvider('ollama', [], { config: { baseUrl: 'http://localhost:11434', model: 'tiny' }, fetchImpl: refused }), /Ollama not reachable/);
+  await assert.rejects(streamProvider('openai', [], { config: { baseUrl: 'https://api.openai.com/v1', model: 'x' }, key: 'k', fetchImpl: refused }), /openai not reachable/);
+});
+
+test('HTTP status errors carry a setup hint', async () => {
+  await assert.rejects(streamProvider('freellm', [], { config: { baseUrl: 'http://localhost:3001/v1', model: 'auto' }, key: 'bad', fetchImpl: async () => response('unauthorized', 401) }), /unified key was rejected/);
+  await assert.rejects(streamProvider('openai', [], { config: { baseUrl: 'https://api.openai.com/v1', model: 'x' }, key: 'bad', fetchImpl: async () => response('missing', 404) }), /Load models/);
+});
+
+test('pingProvider reports reachability and models without sending a key requirement', async () => {
+  const up = await pingProvider('freellm', { config: { baseUrl: 'http://localhost:3001/v1' }, key: 'k', fetchImpl: async () => new Response(JSON.stringify({ data: [{ id: 'google/gemini-2.0-flash-001:free' }] }), { status: 200, headers: { 'content-type': 'application/json' } }) });
+  assert.equal(up.ok, true);
+  assert.deepEqual(up.models, ['google/gemini-2.0-flash-001:free']);
+});
+
+test('pingProvider reports a down router with a friendly message', async () => {
+  const refused = async () => { const error = new TypeError('fetch failed'); error.cause = { code: 'ECONNREFUSED' }; throw error; };
+  const down = await pingProvider('freellm', { config: { baseUrl: 'http://localhost:3001/v1' }, key: 'k', fetchImpl: refused });
+  assert.equal(down.reachable, false);
+  assert.match(down.error, /FreeLLMAPI router not reachable/);
 });

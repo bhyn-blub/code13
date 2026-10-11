@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { readyHarness, waitFor, waitForStatus } = require('./helpers/harness');
+const { createHarness, readyHarness, waitFor, waitForStatus } = require('./helpers/harness');
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -197,4 +197,35 @@ test('a queued agent question survives a restart and can be answered afterward',
   const resumed = await second.ipcHandlers.get('task:get')(null, plan.id);
   assert.equal(resumed.status, 'needs-attention');
   assert.ok(resumed.events.some(item => item.type === 'resume-required'));
+});
+
+test('bootstrap explains why a provider is not ready yet', async t => {
+  const harness = await createHarness(t);
+  const first = harness.boot();
+  await sleep(50);
+  await first.ipcHandlers.get('workspace:select')();
+  await first.ipcHandlers.get('settings:save')(null, {
+    providers: { freellm: { baseUrl: 'http://localhost:3001/v1', model: '', apiKey: 'freellm-unified-key' } }
+  });
+  const boot = await first.ipcHandlers.get('app:bootstrap')();
+  assert.equal(boot.providerStatus.freellm.reason, 'no-model', 'a key without a model is reported as no-model');
+  assert.equal(boot.providerReady.freellm, false);
+  assert.equal(boot.providerStatus.openai.reason, 'no-key', 'a provider without a key is reported as no-key');
+});
+
+test('FreeLLM drives a full task to completion through the local router', async t => {
+  const harness = await createHarness(t);
+  const first = harness.boot();
+  await sleep(50);
+  await first.ipcHandlers.get('workspace:select')();
+  await first.ipcHandlers.get('settings:save')(null, {
+    providers: { freellm: { baseUrl: 'http://localhost:3001/v1', model: 'auto', apiKey: 'freellm-unified-key' } }
+  });
+  const plan = await first.ipcHandlers.get('task:plan')(null, { prompt: 'Build the new feature.', provider: 'freellm', model: 'auto' });
+  assert.equal(plan.steps[0].provider, 'freellm');
+  harness.modelReplies.push('{"type":"final","content":"Routed through FreeLLM."}');
+  await first.ipcHandlers.get('task:approve-route')(null, plan.id);
+  const done = await waitForStatus(first.ipcHandlers, plan.id, 'completed');
+  assert.equal(done.status, 'completed');
+  assert.ok(done.messages.some(message => String(message.content).includes('Routed through FreeLLM.')), 'the router answer reaches the conversation');
 });
