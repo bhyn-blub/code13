@@ -13,6 +13,8 @@ const { gitStatus, gitDiff } = require('./lib/git');
 const { runShell } = require('./lib/shell');
 const { toolInstructions } = require('./lib/prompts');
 const { parseJson, normalizeToolCall } = require('./lib/parse');
+const { startMCPServer, getAllMCPTools, stopMCPServer, getMCPClient } = require('./lib/mcp');
+const { getMCPServers, getMCPServer, createMCPServer, updateMCPServer, deleteMCPServer } = require('./lib/db');
 
 let db;
 let win;
@@ -291,7 +293,8 @@ ipcMain.handle('app:bootstrap', () => {
     models: cachedModelsMap(),
     sessions: getSessions(), currentSessionId, recentTasks, agents,
     currentTask: currentTask ? getTaskSummary(currentTask.id) : null,
-    pendingApprovals: listPendingApprovals(), secureStorageAvailable: safeStorage.isEncryptionAvailable()
+    pendingApprovals: listPendingApprovals(), secureStorageAvailable: safeStorage.isEncryptionAvailable(),
+    mcpServers: getMCPServers(db), mcpTools: getAllMCPTools()
   };
 });
 
@@ -412,6 +415,32 @@ ipcMain.handle('agent:schedule', (_event, id, schedule) => {
   db.prepare('UPDATE agents SET data=?,updated_at=? WHERE id=?').run(JSON.stringify(agent), now(), id);
   return agent;
 });
+
+ipcMain.handle('mcp:list', () => getMCPServers(db));
+ipcMain.handle('mcp:get', (_event, id) => getMCPServer(db, id));
+ipcMain.handle('mcp:add', async (_event, server) => {
+  const id = server.id || makeId();
+  const created = createMCPServer(db, { id, name: server.name, command: server.command, args: server.args, env: server.env });
+  try { await startMCPServer({ ...created, id }); } catch { /* connection will be retried on use */ }
+  return { servers: getMCPServers(db) };
+});
+ipcMain.handle('mcp:update', async (_event, id, updates) => {
+  const updated = updateMCPServer(db, id, updates);
+  try { await startMCPServer({ ...updated, id }); } catch { /* connection will be retried on use */ }
+  return { servers: getMCPServers(db) };
+});
+ipcMain.handle('mcp:remove', async (_event, id) => {
+  await stopMCPServer(id);
+  deleteMCPServer(db, id);
+  return { servers: getMCPServers(db) };
+});
+ipcMain.handle('mcp:connect', async (_event, id) => {
+  const server = getMCPServer(db, id);
+  if (!server) throw new Error('MCP server not found.');
+  await startMCPServer({ ...server, id });
+  return { servers: getMCPServers(db) };
+});
+ipcMain.handle('mcp:tools', () => getAllMCPTools());
 
 ipcMain.handle('task:plan', async (_event, request) => {
   const prompt = String(request.prompt || '').trim();
@@ -591,7 +620,7 @@ async function coordinateTask(plan) {
         ticketCode: ticket?.code || '',
         provider: agent.provider === 'inherit' ? plan.provider : agent.provider,
         model: agent.model || (agent.provider === 'inherit' ? plan.model : getProviders()[agent.provider]?.model || ''),
-        scheduled: false, allowedTools: agent.tools
+        scheduled: false, allowedTools: [...agent.tools, ...getAllMCPTools().map(t => t.mcpName)]
       });
       reports.push({ agent: agent.name, report, ticketCode: ticket?.code || '' });
       if (ticket && getTicketByCode(plan.id, ticket.code)?.status === 'doing') updateTicket(plan.id, ticket.code, { status: 'done' });
@@ -828,6 +857,14 @@ async function executeTool(workspace, tool, args, allowedTools, taskId, workerId
     if (options.scheduled && (tool === 'create_ticket' || tool === 'assign_ticket')) throw new Error(`${tool} is not available during scheduled checks.`);
     return await executeCoordTool(tool, args, taskId, workerId);
   }
+  // MCP tools: format is "serverId.toolName"
+  if (tool.includes('.') && getAllMCPTools().some(t => t.mcpName === tool)) {
+    if (!allowedTools.includes(tool)) throw new Error(`${tool} is not permitted for this agent.`);
+    const mcpTool = getAllMCPTools().find(t => t.mcpName === tool);
+    const client = getMCPClient(mcpTool.mcpServerId);
+    if (!client) throw new Error(`MCP server ${mcpTool.mcpServerId} not connected.`);
+    return await client.callTool(mcpTool.name, args);
+  }
   if (!allowedTools.includes(tool)) throw new Error(`${tool} is not permitted for this agent.`);
   if (options.scheduled && canRunScheduledTool(tool)) {
     // Read-only scheduled operations may run without prompting.
@@ -920,8 +957,9 @@ async function runDueSchedules() {
     try {
       pushEvent(id, 'agent-status', { agentId: agent.id, name: agent.name, status: 'running', provider: agent.provider, model: agent.model || getProviders()[agent.provider]?.model });
       const readonly = agent.tools.filter(canRunScheduledTool);
+      const mcpToolNames = getAllMCPTools().map(t => t.mcpName);
       const scheduledProvider = agent.provider === 'inherit' ? 'ollama' : agent.provider;
-      const report = await runWorker({ taskId: id, workspace, agent, request: prompt, reportContext: [], provider: scheduledProvider, model: agent.model || getProviders()[scheduledProvider]?.model, scheduled: true, allowedTools: agent.tools });
+      const report = await runWorker({ taskId: id, workspace, agent, request: prompt, reportContext: [], provider: scheduledProvider, model: agent.model || getProviders()[scheduledProvider]?.model, scheduled: true, allowedTools: [...readonly, ...mcpToolNames] });
       if (!listPendingApprovals().some(item => item.taskId === id)) {
         saveMessage(id, 'assistant', report);
         pushEvent(id, 'final', { content: report, scheduled: true });

@@ -16,6 +16,7 @@ function openDatabase({ databasePath, presets = [], defaultProviders = {}, defau
     CREATE TABLE IF NOT EXISTS approvals (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), worker_id TEXT NOT NULL, action TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, decided_at TEXT);
     CREATE TABLE IF NOT EXISTS tickets (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), code TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'todo', assigned_agent_id TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS memory (id TEXT PRIMARY KEY, task_id TEXT, agent_id TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS mcp_servers (id TEXT PRIMARY KEY, name TEXT NOT NULL, command TEXT NOT NULL, args TEXT NOT NULL DEFAULT '[]', env TEXT NOT NULL DEFAULT '{}', enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS idx_events_task ON events(task_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status, created_at);
     CREATE INDEX IF NOT EXISTS idx_tickets_task ON tickets(task_id, created_at);
@@ -45,4 +46,39 @@ function openDatabase({ databasePath, presets = [], defaultProviders = {}, defau
   return db;
 }
 
-module.exports = { openDatabase };
+module.exports = { openDatabase, getMCPServers, getMCPServer, createMCPServer, updateMCPServer, deleteMCPServer };
+
+// MCP server helpers
+function getMCPServers(db) {
+  return db.prepare('SELECT id, name, command, args, env, enabled, created_at AS createdAt, updated_at AS updatedAt FROM mcp_servers ORDER BY created_at').all();
+}
+
+function getMCPServer(db, id) {
+  return db.prepare('SELECT id, name, command, args, env, enabled, created_at AS createdAt, updated_at AS updatedAt FROM mcp_servers WHERE id=?').get(id);
+}
+
+function createMCPServer(db, { id, name, command, args = [], env = {} }) {
+  const stamp = new Date().toISOString();
+  db.prepare('INSERT INTO mcp_servers(id,name,command,args,env,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run(id, name, command, JSON.stringify(args), JSON.stringify(env), 1, stamp, stamp);
+  return getMCPServer(db, id);
+}
+
+function updateMCPServer(db, id, updates) {
+  const fields = [];
+  const values = [];
+  if (updates.name !== undefined) { fields.push('name=?'); values.push(updates.name); }
+  if (updates.command !== undefined) { fields.push('command=?'); values.push(updates.command); }
+  if (updates.args !== undefined) { fields.push('args=?'); values.push(JSON.stringify(updates.args)); }
+  if (updates.env !== undefined) { fields.push('env=?'); values.push(JSON.stringify(updates.env)); }
+  if (updates.enabled !== undefined) { fields.push('enabled=?'); values.push(updates.enabled ? 1 : 0); }
+  if (!fields.length) return getMCPServer(db, id);
+  fields.push('updated_at=?');
+  values.push(new Date().toISOString());
+  values.push(id);
+  db.prepare(`UPDATE mcp_servers SET ${fields.join(',')} WHERE id=?`).run(...values);
+  return getMCPServer(db, id);
+}
+
+function deleteMCPServer(db, id) {
+  db.prepare('DELETE FROM mcp_servers WHERE id=?').run(id);
+}

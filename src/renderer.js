@@ -76,6 +76,13 @@ function init() {
     const models = event.target.closest('[data-load-models]');
     if (models) await loadModels(models.dataset.loadModels);
     if (event.target.closest('#pickWorkspace')) await selectWorkspace();
+    // MCP handlers
+    if (event.target.closest('[data-mcp-add]')) { addMCPServer(); return; }
+    if (event.target.closest('[data-mcp-connect]')) { await connectMCPServer(event.target.closest('[data-mcp-connect]').dataset.mcpConnect); return; }
+    if (event.target.closest('[data-mcp-edit]')) { editMCPServer(event.target.closest('[data-mcp-edit]').dataset.mcpEdit); return; }
+    if (event.target.closest('[data-mcp-remove]')) { await removeMCPServer(event.target.closest('[data-mcp-remove]').dataset.mcpRemove); return; }
+    if (event.target.closest('[data-mcp-save]')) { await saveMCPServer(event); return; }
+    if (event.target.closest('[data-mcp-cancel]')) { cancelMCPEditor(); return; }
   });
   $('#settingsBody').addEventListener('input', event => {
     if (event.target.matches('input, textarea, select')) markSettingsDirty();
@@ -506,6 +513,10 @@ function renderSettings() {
     }).join('') + `<div class="privacy-row"><strong>Task limits</strong><p>The model-call budget pauses a task before it overspends. Max steps bounds how many tool turns a single agent run may take before it reports back.</p></div><div class="form-grid"><div class="field"><label>Budget per task</label><input data-budget type="number" min="5" max="500" value="${esc(String(state.taskBudget || 40))}" /></div><div class="field"><label>Max tool steps per run</label><input data-max-steps type="number" min="4" max="200" value="${esc(String(state.maxSteps || 24))}" /></div></div><p class="settings-note">Hosted providers receive the task and context needed to answer when you approve a route. API keys are stored with Windows secure storage and never written to activity logs.</p>`;
   } else if (state.activeSettingsTab === 'workspace') {
     body.innerHTML = `<div class="workspace-picker"><div><div class="field"><label>Active project folder</label><strong>${esc(state.workspace || 'No project selected')}</strong></div></div><button id="pickWorkspace" class="secondary-button">Choose folder</button></div><p class="settings-note">File access is limited to this project folder. Code 13 ignores dependency/build folders and follows no symbolic links while browsing.</p>`;
+  } else if (state.activeSettingsTab === 'mcp') {
+    const servers = state.mcpServers || [];
+    const tools = state.mcpTools || [];
+    body.innerHTML = `<div class="mcp-section"><div class="mcp-header"><strong>MCP Servers</strong><button class="small-button" data-mcp-add>＋ Add server</button></div><div id="mcpServersList">${servers.length ? servers.map(server => `<div class="mcp-server-card" data-mcp-id="${esc(server.id)}"><div class="mcp-server-head"><strong>${esc(server.name)}</strong><span class="provider-badge ${server.enabled ? '' : 'remote'}">${server.enabled ? 'Connected' : 'Disconnected'}</span></div><div class="mcp-server-meta"><span>Command: ${esc(server.command)}</span>${server.args && server.args.length ? `<span>Args: ${esc(server.args.join(' '))}</span>` : ''}</div><div class="mcp-server-tools">${tools.filter(t => t.mcpServerId === server.id).map(t => `<span class="mcp-tool-tag">${esc(t.name)}</span>`).join('') || '<span class="mcp-no-tools">No tools exposed</span>'}</div><div class="mcp-server-actions"><button class="small-button" data-mcp-connect="${esc(server.id)}"${server.enabled ? '' : ''}>${server.enabled ? 'Reconnect' : 'Connect'}</button><button class="small-button" data-mcp-edit="${esc(server.id)}">Edit</button><button class="small-button" data-mcp-remove="${esc(server.id)}">Remove</button></div></div>`).join('') : '<p class="mcp-empty">No MCP servers configured. Add a server to extend agent capabilities with external tools.</p>'}</div></div><div id="mcpEditor" class="mcp-editor hidden"></div>`;
   } else {
     body.innerHTML = `<div class="privacy-row"><strong>Local orchestration</strong><p>Task state, activity, ticket board, agent configurations, and memory notes are stored on this device in the app’s local database.</p></div><div class="privacy-row"><strong>Provider data flow</strong><p>Ollama requests stay on this device. OpenAI and Anthropic receive prompts and relevant context after you approve a route that names that provider. FreeLLM sends context to your local router, which forwards to free hosted model tiers you selected there.</p></div><div class="privacy-row"><strong>Model-driven routing</strong><p>By default, route planning uses local keyword matching only — no task context is sent to hosted providers before you approve a route. Enable this to let hosted providers (OpenAI, Anthropic, FreeLLM) see the task context for routing before approval.</p><label class="check-item"><input type="checkbox" data-hosted-model-routing ${state.hostedModelRouting ? 'checked' : ''} /> Allow hosted providers to see task context for route planning before approval</label></div><div class="privacy-row"><strong>Ask me</strong><p>When an agent needs a human decision, the question appears in the approval area and waits for your answer. You never approve blindly.</p></div><div class="privacy-row"><strong>Approvals</strong><p>Code 13 asks before each file-write operation and shell command. Scheduled checks can read project files and Git status, but write/command actions wait in the approval queue.</p></div><div class="privacy-row"><strong>Credentials</strong><p>${state.secureStorageAvailable ? 'Windows secure credential storage is available.' : 'Windows secure credential storage is unavailable. Provider keys cannot be stored safely in this session.'} Secrets are excluded from activity history.</p></div>`;
   }
@@ -558,6 +569,64 @@ async function loadModels(provider) {
     if (models.length) { if (!input.value.trim()) input.value = models[0]; let datalist = $(`#models-${provider}`); if (!datalist) { datalist = document.createElement('datalist'); datalist.id = `models-${provider}`; document.body.append(datalist); input.setAttribute('list', datalist.id); } datalist.innerHTML = models.map(model => `<option value="${esc(model)}"></option>`).join(''); }
     result.textContent = `${models.length} models available.`;
   } catch (error) { result.textContent = error.message; }
+}
+
+async function addMCPServer() {
+  const editor = $('#mcpEditor');
+  editor.classList.remove('hidden');
+  editor.innerHTML = `<div class="mcp-editor-form"><h4>Add MCP Server</h4><div class="form-grid"><div class="field"><label>Name</label><input name="name" placeholder="e.g. filesystem, github" /></div><div class="field"><label>Command</label><input name="command" placeholder="e.g. npx, docker, python" /></div></div><div class="form-grid"><div class="field"><label>Args (JSON array)</label><input name="args" placeholder='["-y", "@modelcontextprotocol/server-filesystem", "/path"]' /></div><div class="field"><label>Env (JSON object)</label><input name="env" placeholder='{"KEY": "value"}' /></div></div><div class="mcp-editor-actions"><button class="secondary-button" data-mcp-cancel>Cancel</button><button class="primary-button" data-mcp-save>Save</button></div></div>`;
+  $('#mcpServersList').classList.add('hidden');
+}
+async function editMCPServer(id) {
+  const server = state.mcpServers.find(s => s.id === id);
+  if (!server) return;
+  const editor = $('#mcpEditor');
+  editor.classList.remove('hidden');
+  editor.innerHTML = `<div class="mcp-editor-form"><h4>Edit MCP Server</h4><div class="form-grid"><div class="field"><label>Name</label><input name="name" value="${esc(server.name)}" /></div><div class="field"><label>Command</label><input name="command" value="${esc(server.command)}" /></div></div><div class="form-grid"><div class="field"><label>Args (JSON array)</label><input name="args" value="${esc(JSON.stringify(server.args))}" /></div><div class="field"><label>Env (JSON object)</label><input name="env" value="${esc(JSON.stringify(server.env))}" /></div></div><div class="mcp-editor-actions"><button class="secondary-button" data-mcp-cancel>Cancel</button><button class="primary-button" data-mcp-save data-mcp-id="${esc(id)}">Save</button></div></div>`;
+  $('#mcpServersList').classList.add('hidden');
+}
+async function saveMCPServer(event) {
+  const id = event.target.dataset.mcpId || crypto.randomUUID();
+  const form = event.target.closest('.mcp-editor-form');
+  const name = $('[name="name"]', form).value.trim();
+  const command = $('[name="command"]', form).value.trim();
+  const args = JSON.parse($('[name="args"]', form).value || '[]');
+  const env = JSON.parse($('[name="env"]', form).value || '{}');
+  if (!name || !command) { toast('Name and command are required.'); return; }
+  try {
+    if (event.target.dataset.mcpId) {
+      await window.code13.updateMCPServer(id, { name, command, args, env });
+    } else {
+      await window.code13.addMCPServer({ id, name, command, args, env });
+    }
+    state.mcpServers = (await window.code13.listMCPServers()) || [];
+    state.mcpTools = (await window.code13.mcpTools?.()) || state.mcpTools || [];
+    renderSettings();
+    toast(event.target.dataset.mcpId ? 'MCP server updated.' : 'MCP server added.');
+  } catch (error) { toast(error.message); }
+}
+async function removeMCPServer(id) {
+  if (!confirm('Remove this MCP server?')) return;
+  try {
+    await window.code13.removeMCPServer(id);
+    state.mcpServers = (await window.code13.listMCPServers()) || [];
+    renderSettings();
+    toast('MCP server removed.');
+  } catch (error) { toast(error.message); }
+}
+async function connectMCPServer(id) {
+  try {
+    await window.code13.connectMCPServer(id);
+    state.mcpServers = (await window.code13.listMCPServers()) || [];
+    state.mcpTools = (await window.code13.mcpTools?.()) || state.mcpTools || [];
+    renderSettings();
+    toast('MCP server connected.');
+  } catch (error) { toast(error.message); }
+}
+function cancelMCPEditor() {
+  $('#mcpEditor').classList.add('hidden');
+  $('#mcpEditor').innerHTML = '';
+  $('#mcpServersList')?.classList.remove('hidden');
 }
 
 function renderAgentManager() {

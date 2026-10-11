@@ -22,6 +22,11 @@ contextBridge.exposeInMainWorld('code13', {
   respondApproval: (approvalId, approved, answer, confirmed) => ipcRenderer.invoke('approval:respond', approvalId, approved, answer, confirmed),
   getTask: (taskId) => ipcRenderer.invoke('task:get', taskId),
   getTickets: (taskId) => ipcRenderer.invoke('task:tickets', taskId),
+  listMCPServers: () => ipcRenderer.invoke('mcp:list'),
+  addMCPServer: (server) => ipcRenderer.invoke('mcp:add', server),
+  updateMCPServer: (id, updates) => ipcRenderer.invoke('mcp:update', id, updates),
+  removeMCPServer: (id) => ipcRenderer.invoke('mcp:remove', id),
+  connectMCPServer: (id) => ipcRenderer.invoke('mcp:connect', id),
   onEvent: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('code13:event', listener);
