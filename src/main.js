@@ -230,7 +230,7 @@ async function expandAtFileReferences(workspace, text) {
       if (!stat.isFile()) continue;
       if (stat.size > 500000) continue;
       const content = (await fs.readFile(filePath, 'utf8')).slice(0, 16000);
-      result = result.replace(new RegExp(`@${escapeRegExp(rel)}(?![^\s,;(){}[\\]\"'\`])`, 'g'), `### @${rel}\n\`\`\`${getCodeFence(content)}\n${content}\n\`\`\``);
+      result = result.replace(new RegExp(`@${escapeRegExp(rel)}(?![^\s,;(){}[\]"'\`])`, 'g'), `### @${rel}\n\`\`\`${getCodeFence(content)}\n${content}\n\`\`\``);
     } catch { /* ignore missing/unreadable files */ }
   }
   return result;
