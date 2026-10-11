@@ -299,3 +299,24 @@ test('bootstrap exposes cached provider models to the composer', async t => {
   const boot = await first.ipcHandlers.get('app:bootstrap')();
   assert.deepEqual(boot.models.freellm, ['alpha', 'beta']);
 });
+
+test('a worker keeps going past the old eight-step cap', async t => {
+  const { ipcHandlers, events, modelReplies } = await readyHarness(t, { taskBudget: 30 });
+  const plan = await ipcHandlers.get('task:plan')(null, { prompt: 'Fix one bug in the project.', provider: 'openai', model: 'model-x' });
+  assert.deepEqual(plan.steps.map(step => step.agentId), ['builder'], 'a narrow fix routes to one agent');
+  for (let i = 0; i < 9; i++) modelReplies.push('{"type":"tool","name":"update_ticket","arguments":{"code":"T-1","status":"doing"}}');
+  modelReplies.push('{"type":"final","content":"Finished after a long run."}');
+  await ipcHandlers.get('task:approve-route')(null, plan.id);
+  const done = await waitForStatus(ipcHandlers, plan.id, 'completed');
+  assert.equal(done.status, 'completed');
+  assert.ok(done.messages.some(message => String(message.content).includes('Finished after a long run.')), 'the run reached its final report');
+  assert.ok(events.filter(item => item.type === 'agent-thinking').length >= 10, 'the worker took more than eight model turns');
+});
+
+test('bootstrap exposes the max tool-step setting to Settings', async t => {
+  const { ipcHandlers } = await readyHarness(t);
+  const boot = await ipcHandlers.get('app:bootstrap')();
+  assert.equal(boot.maxSteps, 24);
+  const saved = await ipcHandlers.get('settings:save')(null, { maxSteps: 12 });
+  assert.equal(saved.maxSteps, 12);
+});

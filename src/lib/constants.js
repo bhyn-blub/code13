@@ -16,6 +16,9 @@ const PROVIDER_LABELS = {
 const COORD_TOOLS = ['create_ticket', 'update_ticket', 'assign_ticket', 'ask_user'];
 const PROJECT_TOOLS = ['list_files', 'read_file', 'git_status', 'git_diff', 'write_file', 'run_shell'];
 const DEFAULT_TASK_BUDGET = 40;
+const DEFAULT_MAX_STEPS = 24;
+const CONTEXT_TOKEN_BUDGET = 8000;
+const TOOL_RESULT_LIMIT = 8000;
 
 const TOOL_LABELS = {
   list_files: 'List files', read_file: 'Read files', git_status: 'Git status', git_diff: 'Git diff',
@@ -43,6 +46,6 @@ function destinationForProviders(plannedProviders) {
 
 module.exports = {
   PROVIDERS, LOCAL_PROVIDERS, DEFAULT_PROVIDERS, PROVIDER_LABELS, TOOL_LABELS,
-  COORD_TOOLS, PROJECT_TOOLS, DEFAULT_TASK_BUDGET, PRESETS,
+  COORD_TOOLS, PROJECT_TOOLS, DEFAULT_TASK_BUDGET, DEFAULT_MAX_STEPS, CONTEXT_TOKEN_BUDGET, TOOL_RESULT_LIMIT, PRESETS,
   providerLabel, providerIsLocal, destinationForProviders
 };

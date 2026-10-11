@@ -36,6 +36,8 @@ The portable app folder is written to `release/win-unpacked`. To create an NSIS 
 - **Handoffs.** A finishing agent can create a ticket and assign it to another agent, which then runs automatically (`assign_ticket` / `create_ticket`).
 - **Ask me inbox.** When an agent needs a human decision it posts a question (`ask_user`); you answer with free text and the agent continues.
 - **Circuit breaker.** A per-task model-call budget (Settings → Providers, default 40) pauses a task as **Needs attention** before it overspends.
+- **Longer, bounded runs.** A worker takes up to **max tool steps per run** (Settings → Providers, default 24) before reporting back, so multi-file changes are not cut off at the old eight-step limit.
+- **Context compaction.** On a long run, older tool turns are digested to a compact summary so the run keeps going without overflowing a small model's context; the activity feed shows a "context compacted" entry.
 - **Institutional memory.** Completed work is recorded per agent and surfaced to the whole team in later runs.
 - Workspace file listing/reading, Git status/diff, and explicit approval for each file write and PowerShell command.
 - Local SQLite event history, Windows secure storage for provider credentials, and editable agent memory notes.
@@ -62,7 +64,7 @@ The portable app folder is written to `release/win-unpacked`. To create an NSIS 
 
 ## Development
 
-The main process is split into focused modules under `src/lib/`: `db.js` (SQLite schema and seeding), `model.js` (provider I/O), `git.js`/`shell.js`/`workspace.js` (project tools), `prompts.js` (agent prompt text), `constants.js` (providers, presets, labels), and `policy.js` (path, secret, and shell-risk policy). `src/main.js` wires IPC, orchestration, and the scheduler.
+The main process is split into focused modules under `src/lib/`: `db.js` (SQLite schema and seeding), `model.js` (provider I/O), `context.js` (token estimation and compaction), `git.js`/`shell.js`/`workspace.js` (project tools), `prompts.js` (agent prompt text), `constants.js` (providers, presets, labels), and `policy.js` (path, secret, and shell-risk policy). `src/main.js` wires IPC, orchestration, and the scheduler.
 
 ```powershell
 npm test          # node:test suite
@@ -76,4 +78,4 @@ npm run format    # Prettier (opt-in; the shipped files use a compact style)
 npm test
 ```
 
-The test suite covers provider streams and errors, provider reachability/readiness diagnostics, composer model auto-resolution and model-list caching, FreeLLM routing end-to-end, route/privacy behavior, workspace path checks, approved file writes and shell commands, restart-persistent approvals, Builder/Reviewer sequencing, ticket creation, agent handoffs, the Ask-me round trip, the circuit breaker, restart-persistent questions, model-output parsing, secret-file and VCS-internal policy (including `git_diff` filtering and token redaction), recoverable tool errors, cancelling a task that is awaiting approval, shell-risk assessment, scheduled read-only permissions, and the extracted Git/shell/workspace tool modules.
+The test suite covers provider streams and errors, provider reachability/readiness diagnostics, composer model auto-resolution and model-list caching, context compaction, the deeper bounded worker loop, FreeLLM routing end-to-end, route/privacy behavior, workspace path checks, approved file writes and shell commands, restart-persistent approvals, Builder/Reviewer sequencing, ticket creation, agent handoffs, the Ask-me round trip, the circuit breaker, restart-persistent questions, model-output parsing, secret-file and VCS-internal policy (including `git_diff` filtering and token redaction), recoverable tool errors, cancelling a task that is awaiting approval, shell-risk assessment, scheduled read-only permissions, and the extracted Git/shell/workspace tool modules.

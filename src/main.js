@@ -4,9 +4,10 @@ const fs = require('node:fs/promises');
 const { existsSync } = require('node:fs');
 const { randomUUID } = require('node:crypto');
 const { resolveWorkspacePath, assertNoSymlinkPath, isSensitivePath, canRunScheduledTool, redactForLog, assessShellRisk } = require('./lib/policy');
-const { PROVIDERS, DEFAULT_PROVIDERS, LOCAL_PROVIDERS, PROVIDER_LABELS, TOOL_LABELS, COORD_TOOLS, PROJECT_TOOLS, DEFAULT_TASK_BUDGET, PRESETS, destinationForProviders } = require('./lib/constants');
+const { PROVIDERS, DEFAULT_PROVIDERS, LOCAL_PROVIDERS, PROVIDER_LABELS, TOOL_LABELS, COORD_TOOLS, PROJECT_TOOLS, DEFAULT_TASK_BUDGET, DEFAULT_MAX_STEPS, CONTEXT_TOKEN_BUDGET, TOOL_RESULT_LIMIT, PRESETS, destinationForProviders } = require('./lib/constants');
 const { openDatabase } = require('./lib/db');
 const { createModelClient } = require('./lib/model');
+const { compactMessages } = require('./lib/context');
 const { listWorkspaceFiles } = require('./lib/workspace');
 const { gitStatus, gitDiff } = require('./lib/git');
 const { runShell } = require('./lib/shell');
@@ -157,6 +158,14 @@ function getTaskBudget() {
   const value = Number(getSetting('task_budget', String(DEFAULT_TASK_BUDGET)));
   return Number.isFinite(value) && value > 0 ? value : DEFAULT_TASK_BUDGET;
 }
+function getMaxSteps() {
+  const value = Number(getSetting('task_max_steps', String(DEFAULT_MAX_STEPS)));
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : DEFAULT_MAX_STEPS;
+}
+function capToolResult(text, limit = TOOL_RESULT_LIMIT) {
+  const value = String(text ?? '');
+  return value.length > limit ? `${value.slice(0, limit)}\n…[truncated ${value.length - limit} characters]` : value;
+}
 function getTaskSummary(taskId) {
   const task = db.prepare('SELECT id,title,status,mode,created_at AS createdAt,updated_at AS updatedAt FROM tasks WHERE id=?').get(taskId);
   if (!task) return null;
@@ -208,7 +217,7 @@ ipcMain.handle('app:bootstrap', () => {
   const recentTasks = db.prepare('SELECT id,title,status,mode,created_at AS createdAt FROM tasks ORDER BY created_at DESC LIMIT 20').all();
   const currentTask = recentTasks.find(task => ['awaiting-approval', 'awaiting-route-approval', 'running'].includes(task.status)) || null;
   return {
-    workspace: getSetting('workspace'), providers, localProviders: LOCAL_PROVIDERS, taskBudget: getTaskBudget(),
+    workspace: getSetting('workspace'), providers, localProviders: LOCAL_PROVIDERS, taskBudget: getTaskBudget(), maxSteps: getMaxSteps(),
     providerOrder: PROVIDERS, providerLabels: PROVIDER_LABELS, toolLabels: TOOL_LABELS,
     providerReady: providerReadyMap(),
     providerStatus: providerStatusMap(),
@@ -243,7 +252,11 @@ ipcMain.handle('settings:save', (_event, data) => {
     const budget = Math.max(5, Math.min(500, Number(data.taskBudget) || DEFAULT_TASK_BUDGET));
     setSetting('task_budget', String(budget));
   }
-  return { providers, providerReady: providerReadyMap(), providerStatus: providerStatusMap(), taskBudget: getTaskBudget() };
+  if (data.maxSteps !== undefined) {
+    const steps = Math.max(4, Math.min(200, Number(data.maxSteps) || DEFAULT_MAX_STEPS));
+    setSetting('task_max_steps', String(steps));
+  }
+  return { providers, providerReady: providerReadyMap(), providerStatus: providerStatusMap(), taskBudget: getTaskBudget(), maxSteps: getMaxSteps() };
 });
 
 ipcMain.handle('provider:test', async (_event, provider) => ({ provider, models: await testProvider(provider) }));
@@ -549,11 +562,12 @@ async function runWorker({ taskId, workspace, agent, request, reportContext, pro
   const role = `${agent.instructions}\n\nAgent memory (user-editable local notes):\n${agent.memory || '(none)'}`;
   const memory = readRecentMemory(agent.id, 6);
   const board = getTickets(taskId).map(ticket => `${ticket.code} [${ticket.status}] ${ticket.title}${ticket.assignedAgentId ? ` → ${agentName(ticket.assignedAgentId)}` : ''}`);
-  const messages = [
+  let messages = [
     { role: 'system', content: toolInstructions(allowedTools, scheduled).replace('{{ROLE}}', role) },
     { role: 'user', content: JSON.stringify({ task: request, currentTicket: ticketCode || null, workspaceName: path.basename(workspace), ticketBoard: board, priorRuns: (reportContext || []).map(item => `${item.agent}${item.ticketCode ? ` (${item.ticketCode})` : ''}: ${String(item.report).slice(0, 1200)}`), institutionalMemory: memory }) }
   ];
-  for (let step = 0; step < 8; step++) {
+  const maxSteps = getMaxSteps();
+  for (let step = 0; step < maxSteps; step++) {
     if (cancelledTasks.has(taskId)) throw new Error('Task cancelled.');
     pushEvent(taskId, 'agent-thinking', { agentId: agent.id, name: agent.name });
     const output = await callModelBudget(taskId, provider, messages);
@@ -580,9 +594,14 @@ async function runWorker({ taskId, workspace, agent, request, reportContext, pro
       toolResult = `Tool error: ${error.message}`;
       pushEvent(taskId, 'tool-error', { agentId: agent.id, name: agent.name, tool: toolCall.name, message: error.message });
     }
-    messages.push({ role: 'user', content: `Tool result for ${toolCall.name}:\n${toolResult}` });
+    messages.push({ role: 'user', content: `Tool result for ${toolCall.name}:\n${capToolResult(toolResult)}` });
+    const compacted = compactMessages(messages, { maxTokens: CONTEXT_TOKEN_BUDGET });
+    if (compacted.compacted) {
+      messages = compacted.messages;
+      pushEvent(taskId, 'context-compacted', { agentId: agent.id, name: agent.name, tokens: compacted.tokens });
+    }
   }
-  return 'Stopped after 8 tool steps to keep this run bounded. Continue in a new task if more work is needed.';
+  return `Stopped after ${maxSteps} tool steps to keep this run bounded. Continue in a new task if more work is needed.`;
 }
 
 async function executeTool(workspace, tool, args, allowedTools, taskId, workerId, options = {}) {
