@@ -15,6 +15,7 @@ const { toolInstructions } = require('./lib/prompts');
 const { parseJson, normalizeToolCall } = require('./lib/parse');
 const { startMCPServer, getAllMCPTools, stopMCPServer, getMCPClient } = require('./lib/mcp');
 const { startLSPServer, getLSPClient, stopLSPServer } = require('./lib/lsp');
+const { validateConfig, sanitizeConfig } = require('./lib/config-schema');
 const { getMCPServers, getMCPServer, createMCPServer, updateMCPServer, deleteMCPServer, getCustomCommands, getCustomCommand, createCustomCommand, updateCustomCommand, deleteCustomCommand, getSkills, getSkill, createSkill, updateSkill, deleteSkill } = require('./lib/db');
 
 let db;
@@ -348,31 +349,29 @@ ipcMain.handle('workspace:select', async () => {
 });
 
 ipcMain.handle('settings:save', (_event, data) => {
+  const validation = validateConfig(data);
+  if (!validation.valid) {
+    throw new Error(`Invalid settings: ${validation.errors.join('; ')}`);
+  }
+  const sanitized = sanitizeConfig(data);
   const providers = getProviders();
   for (const provider of PROVIDERS) {
-    if (data.providers?.[provider]) {
+    if (sanitized.providers?.[provider]) {
       providers[provider] = {
         ...providers[provider],
-        baseUrl: data.providers[provider].baseUrl || DEFAULT_PROVIDERS[provider].baseUrl,
-        model: String(data.providers[provider].model || '').trim()
+        baseUrl: sanitized.providers[provider].baseUrl || DEFAULT_PROVIDERS[provider].baseUrl,
+        model: String(sanitized.providers[provider].model || '').trim()
       };
-      if (data.providers[provider].apiKey) saveCredential(provider, String(data.providers[provider].apiKey).trim());
-      if (data.providers[provider].clearKey) db.prepare('DELETE FROM credentials WHERE provider=?').run(provider);
+      if (data.providers?.[provider]?.apiKey) saveCredential(provider, String(data.providers[provider].apiKey).trim());
+      if (data.providers?.[provider]?.clearKey) db.prepare('DELETE FROM credentials WHERE provider=?').run(provider);
     }
   }
   setSetting('providers', JSON.stringify(providers));
-  if (data.taskBudget !== undefined) {
-    const budget = Math.max(5, Math.min(500, Number(data.taskBudget) || DEFAULT_TASK_BUDGET));
-    setSetting('task_budget', String(budget));
-  }
-  if (data.maxSteps !== undefined) {
-    const steps = Math.max(4, Math.min(200, Number(data.maxSteps) || DEFAULT_MAX_STEPS));
-    setSetting('task_max_steps', String(steps));
-  }
-  if (data.hostedModelRouting !== undefined) {
-    setSetting('hosted_model_routing', data.hostedModelRouting ? 'true' : 'false');
-  }
-  return { providers, providerReady: providerReadyMap(), providerStatus: providerStatusMap(), taskBudget: getTaskBudget(), maxSteps: getMaxSteps() };
+  if (sanitized.taskBudget !== undefined) setSetting('task_budget', String(sanitized.taskBudget));
+  if (sanitized.maxSteps !== undefined) setSetting('task_max_steps', String(sanitized.maxSteps));
+  if (sanitized.hostedModelRouting !== undefined) setSetting('hosted_model_routing', sanitized.hostedModelRouting ? 'true' : 'false');
+  if (sanitized.workspace !== undefined) setSetting('workspace', sanitized.workspace);
+  return { providers, providerReady: providerReadyMap(), providerStatus: providerStatusMap(), taskBudget: getTaskBudget(), maxSteps: getMaxSteps(), hostedModelRouting: getSetting('hosted_model_routing') === 'true' };
 });
 
 ipcMain.handle('provider:test', async (_event, provider) => ({ provider, models: await testProvider(provider) }));
