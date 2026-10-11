@@ -17,6 +17,7 @@ function openDatabase({ databasePath, presets = [], defaultProviders = {}, defau
     CREATE TABLE IF NOT EXISTS tickets (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), code TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'todo', assigned_agent_id TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS memory (id TEXT PRIMARY KEY, task_id TEXT, agent_id TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS mcp_servers (id TEXT PRIMARY KEY, name TEXT NOT NULL, command TEXT NOT NULL, args TEXT NOT NULL DEFAULT '[]', env TEXT NOT NULL DEFAULT '{}', enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS custom_commands (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', prompt TEXT NOT NULL, args TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS idx_events_task ON events(task_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status, created_at);
     CREATE INDEX IF NOT EXISTS idx_tickets_task ON tickets(task_id, created_at);
@@ -46,7 +47,7 @@ function openDatabase({ databasePath, presets = [], defaultProviders = {}, defau
   return db;
 }
 
-module.exports = { openDatabase, getMCPServers, getMCPServer, createMCPServer, updateMCPServer, deleteMCPServer };
+module.exports = { openDatabase, getMCPServers, getMCPServer, createMCPServer, updateMCPServer, deleteMCPServer, getCustomCommands, getCustomCommand, createCustomCommand, updateCustomCommand, deleteCustomCommand };
 
 // MCP server helpers
 function getMCPServers(db) {
@@ -81,4 +82,38 @@ function updateMCPServer(db, id, updates) {
 
 function deleteMCPServer(db, id) {
   db.prepare('DELETE FROM mcp_servers WHERE id=?').run(id);
+}
+
+// Custom command helpers
+function getCustomCommands(db) {
+  return db.prepare('SELECT id, name, description, prompt, args, created_at AS createdAt, updated_at AS updatedAt FROM custom_commands ORDER BY name').all();
+}
+
+function getCustomCommand(db, id) {
+  return db.prepare('SELECT id, name, description, prompt, args, created_at AS createdAt, updated_at AS updatedAt FROM custom_commands WHERE id=?').get(id);
+}
+
+function createCustomCommand(db, { id, name, description = '', prompt, args = [] }) {
+  const stamp = new Date().toISOString();
+  db.prepare('INSERT INTO custom_commands(id,name,description,prompt,args,created_at,updated_at) VALUES(?,?,?,?,?,?,?)').run(id, name, description, prompt, JSON.stringify(args), stamp, stamp);
+  return getCustomCommand(db, id);
+}
+
+function updateCustomCommand(db, id, updates) {
+  const fields = [];
+  const values = [];
+  if (updates.name !== undefined) { fields.push('name=?'); values.push(updates.name); }
+  if (updates.description !== undefined) { fields.push('description=?'); values.push(updates.description); }
+  if (updates.prompt !== undefined) { fields.push('prompt=?'); values.push(updates.prompt); }
+  if (updates.args !== undefined) { fields.push('args=?'); values.push(JSON.stringify(updates.args)); }
+  if (!fields.length) return getCustomCommand(db, id);
+  fields.push('updated_at=?');
+  values.push(new Date().toISOString());
+  values.push(id);
+  db.prepare(`UPDATE custom_commands SET ${fields.join(',')} WHERE id=?`).run(...values);
+  return getCustomCommand(db, id);
+}
+
+function deleteCustomCommand(db, id) {
+  db.prepare('DELETE FROM custom_commands WHERE id=?').run(id);
 }

@@ -14,7 +14,7 @@ const { runShell } = require('./lib/shell');
 const { toolInstructions } = require('./lib/prompts');
 const { parseJson, normalizeToolCall } = require('./lib/parse');
 const { startMCPServer, getAllMCPTools, stopMCPServer, getMCPClient } = require('./lib/mcp');
-const { getMCPServers, getMCPServer, createMCPServer, updateMCPServer, deleteMCPServer } = require('./lib/db');
+const { getMCPServers, getMCPServer, createMCPServer, updateMCPServer, deleteMCPServer, getCustomCommands, getCustomCommand, createCustomCommand, updateCustomCommand, deleteCustomCommand } = require('./lib/db');
 
 let db;
 let win;
@@ -294,7 +294,7 @@ ipcMain.handle('app:bootstrap', () => {
     sessions: getSessions(), currentSessionId, recentTasks, agents,
     currentTask: currentTask ? getTaskSummary(currentTask.id) : null,
     pendingApprovals: listPendingApprovals(), secureStorageAvailable: safeStorage.isEncryptionAvailable(),
-    mcpServers: getMCPServers(db), mcpTools: getAllMCPTools()
+    mcpServers: getMCPServers(db), mcpTools: getAllMCPTools(), customCommands: getCustomCommands(db)
   };
 });
 
@@ -441,6 +441,22 @@ ipcMain.handle('mcp:connect', async (_event, id) => {
   return { servers: getMCPServers(db) };
 });
 ipcMain.handle('mcp:tools', () => getAllMCPTools());
+
+ipcMain.handle('command:list', () => getCustomCommands(db));
+ipcMain.handle('command:get', (_event, id) => getCustomCommand(db, id));
+ipcMain.handle('command:add', (_event, cmd) => {
+  const id = cmd.id || makeId();
+  createCustomCommand(db, { id, name: cmd.name, description: cmd.description, prompt: cmd.prompt, args: cmd.args });
+  return { commands: getCustomCommands(db) };
+});
+ipcMain.handle('command:update', (_event, id, updates) => {
+  updateCustomCommand(db, id, updates);
+  return { commands: getCustomCommands(db) };
+});
+ipcMain.handle('command:remove', (_event, id) => {
+  deleteCustomCommand(db, id);
+  return { commands: getCustomCommands(db) };
+});
 
 ipcMain.handle('task:plan', async (_event, request) => {
   const prompt = String(request.prompt || '').trim();

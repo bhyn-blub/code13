@@ -83,6 +83,13 @@ function init() {
     if (event.target.closest('[data-mcp-remove]')) { await removeMCPServer(event.target.closest('[data-mcp-remove]').dataset.mcpRemove); return; }
     if (event.target.closest('[data-mcp-save]')) { await saveMCPServer(event); return; }
     if (event.target.closest('[data-mcp-cancel]')) { cancelMCPEditor(); return; }
+    // Custom command handlers
+    if (event.target.closest('[data-cmd-add]')) { addCustomCommand(); return; }
+    if (event.target.closest('[data-cmd-edit]')) { editCustomCommand(event.target.closest('[data-cmd-edit]').dataset.cmdEdit); return; }
+    if (event.target.closest('[data-cmd-remove]')) { await removeCustomCommand(event.target.closest('[data-cmd-remove]').dataset.cmdRemove); return; }
+    if (event.target.closest('[data-cmd-run]')) { runCustomCommand(event.target.closest('[data-cmd-run]').dataset.cmdRun); return; }
+    if (event.target.closest('[data-cmd-save]')) { await saveCustomCommand(event); return; }
+    if (event.target.closest('[data-cmd-cancel]')) { cancelCmdEditor(); return; }
   });
   $('#settingsBody').addEventListener('input', event => {
     if (event.target.matches('input, textarea, select')) markSettingsDirty();
@@ -517,6 +524,9 @@ function renderSettings() {
     const servers = state.mcpServers || [];
     const tools = state.mcpTools || [];
     body.innerHTML = `<div class="mcp-section"><div class="mcp-header"><strong>MCP Servers</strong><button class="small-button" data-mcp-add>＋ Add server</button></div><div id="mcpServersList">${servers.length ? servers.map(server => `<div class="mcp-server-card" data-mcp-id="${esc(server.id)}"><div class="mcp-server-head"><strong>${esc(server.name)}</strong><span class="provider-badge ${server.enabled ? '' : 'remote'}">${server.enabled ? 'Connected' : 'Disconnected'}</span></div><div class="mcp-server-meta"><span>Command: ${esc(server.command)}</span>${server.args && server.args.length ? `<span>Args: ${esc(server.args.join(' '))}</span>` : ''}</div><div class="mcp-server-tools">${tools.filter(t => t.mcpServerId === server.id).map(t => `<span class="mcp-tool-tag">${esc(t.name)}</span>`).join('') || '<span class="mcp-no-tools">No tools exposed</span>'}</div><div class="mcp-server-actions"><button class="small-button" data-mcp-connect="${esc(server.id)}"${server.enabled ? '' : ''}>${server.enabled ? 'Reconnect' : 'Connect'}</button><button class="small-button" data-mcp-edit="${esc(server.id)}">Edit</button><button class="small-button" data-mcp-remove="${esc(server.id)}">Remove</button></div></div>`).join('') : '<p class="mcp-empty">No MCP servers configured. Add a server to extend agent capabilities with external tools.</p>'}</div></div><div id="mcpEditor" class="mcp-editor hidden"></div>`;
+  } else if (state.activeSettingsTab === 'commands') {
+    const commands = state.customCommands || [];
+    body.innerHTML = `<div class="commands-section"><div class="commands-header"><strong>Custom Commands</strong><button class="small-button" data-cmd-add>＋ Add command</button></div><div id="commandsList">${commands.length ? commands.map(cmd => `<div class="command-card" data-cmd-id="${esc(cmd.id)}"><div class="command-head"><strong>${esc(cmd.name)}</strong></div><div class="command-desc">${esc(cmd.description || '(no description)')}</div><div class="command-prompt"><small>Prompt: ${esc(cmd.prompt.slice(0, 100))}${cmd.prompt.length > 100 ? '…' : ''}</small></div><div class="command-args"><small>Args: ${esc(JSON.stringify(cmd.args))}</small></div><div class="command-actions"><button class="small-button" data-cmd-edit="${esc(cmd.id)}">Edit</button><button class="small-button" data-cmd-remove="${esc(cmd.id)}">Remove</button><button class="small-button" data-cmd-run="${esc(cmd.id)}">Run</button></div></div>`).join('') : '<p class="commands-empty">No custom commands. Add a command to create reusable prompt templates with arguments.</p>'}</div></div><div id="cmdEditor" class="cmd-editor hidden"></div>`;
   } else {
     body.innerHTML = `<div class="privacy-row"><strong>Local orchestration</strong><p>Task state, activity, ticket board, agent configurations, and memory notes are stored on this device in the app’s local database.</p></div><div class="privacy-row"><strong>Provider data flow</strong><p>Ollama requests stay on this device. OpenAI and Anthropic receive prompts and relevant context after you approve a route that names that provider. FreeLLM sends context to your local router, which forwards to free hosted model tiers you selected there.</p></div><div class="privacy-row"><strong>Model-driven routing</strong><p>By default, route planning uses local keyword matching only — no task context is sent to hosted providers before you approve a route. Enable this to let hosted providers (OpenAI, Anthropic, FreeLLM) see the task context for routing before approval.</p><label class="check-item"><input type="checkbox" data-hosted-model-routing ${state.hostedModelRouting ? 'checked' : ''} /> Allow hosted providers to see task context for route planning before approval</label></div><div class="privacy-row"><strong>Ask me</strong><p>When an agent needs a human decision, the question appears in the approval area and waits for your answer. You never approve blindly.</p></div><div class="privacy-row"><strong>Approvals</strong><p>Code 13 asks before each file-write operation and shell command. Scheduled checks can read project files and Git status, but write/command actions wait in the approval queue.</p></div><div class="privacy-row"><strong>Credentials</strong><p>${state.secureStorageAvailable ? 'Windows secure credential storage is available.' : 'Windows secure credential storage is unavailable. Provider keys cannot be stored safely in this session.'} Secrets are excluded from activity history.</p></div>`;
   }
@@ -627,6 +637,68 @@ function cancelMCPEditor() {
   $('#mcpEditor').classList.add('hidden');
   $('#mcpEditor').innerHTML = '';
   $('#mcpServersList')?.classList.remove('hidden');
+}
+
+async function addCustomCommand() {
+  const editor = $('#cmdEditor');
+  editor.classList.remove('hidden');
+  editor.innerHTML = `<div class="cmd-editor-form"><h4>Add Custom Command</h4><div class="form-grid"><div class="field"><label>Name</label><input name="name" placeholder="e.g. fix-test, refactor" /></div><div class="field"><label>Description</label><input name="description" placeholder="What this command does" /></div></div><div class="field"><label>Prompt template</label><textarea name="prompt" placeholder="Describe what to do... Use {argName} for arguments"></textarea></div><div class="form-grid"><div class="field"><label>Args (JSON array of names)</label><input name="args" placeholder='["file", "issue"]' /></div></div><div class="cmd-editor-actions"><button class="secondary-button" data-cmd-cancel>Cancel</button><button class="primary-button" data-cmd-save>Save</button></div></div>`;
+  $('#commandsList').classList.add('hidden');
+}
+async function editCustomCommand(id) {
+  const cmd = state.customCommands.find(c => c.id === id);
+  if (!cmd) return;
+  const editor = $('#cmdEditor');
+  editor.classList.remove('hidden');
+  editor.innerHTML = `<div class="cmd-editor-form"><h4>Edit Custom Command</h4><div class="form-grid"><div class="field"><label>Name</label><input name="name" value="${esc(cmd.name)}" /></div><div class="field"><label>Description</label><input name="description" value="${esc(cmd.description)}" /></div></div><div class="field"><label>Prompt template</label><textarea name="prompt">${esc(cmd.prompt)}</textarea></div><div class="form-grid"><div class="field"><label>Args (JSON array of names)</label><input name="args" value="${esc(JSON.stringify(cmd.args))}" /></div></div><div class="cmd-editor-actions"><button class="secondary-button" data-cmd-cancel>Cancel</button><button class="primary-button" data-cmd-save data-cmd-id="${esc(id)}">Save</button></div></div>`;
+  $('#commandsList').classList.add('hidden');
+}
+async function saveCustomCommand(event) {
+  const id = event.target.dataset.cmdId || crypto.randomUUID();
+  const form = event.target.closest('.cmd-editor-form');
+  const name = $('[name="name"]', form).value.trim();
+  const description = $('[name="description"]', form).value.trim();
+  const prompt = $('[name="prompt"]', form).value.trim();
+  const args = JSON.parse($('[name="args"]', form).value || '[]');
+  if (!name || !prompt) { toast('Name and prompt are required.'); return; }
+  try {
+    if (event.target.dataset.cmdId) {
+      await window.code13.updateCustomCommand(id, { name, description, prompt, args });
+    } else {
+      await window.code13.addCustomCommand({ id, name, description, prompt, args });
+    }
+    state.customCommands = (await window.code13.listCustomCommands()) || [];
+    renderSettings();
+    toast(event.target.dataset.cmdId ? 'Command updated.' : 'Command added.');
+  } catch (error) { toast(error.message); }
+}
+async function removeCustomCommand(id) {
+  if (!confirm('Remove this custom command?')) return;
+  try {
+    await window.code13.removeCustomCommand(id);
+    state.customCommands = (await window.code13.listCustomCommands()) || [];
+    renderSettings();
+    toast('Command removed.');
+  } catch (error) { toast(error.message); }
+}
+async function runCustomCommand(id) {
+  const cmd = state.customCommands.find(c => c.id === id);
+  if (!cmd) return;
+  // Fill the composer with the command prompt, substituting args
+  let prompt = cmd.prompt;
+  // Simple arg substitution - in real use, you'd prompt for args
+  for (const arg of cmd.args) {
+    prompt = prompt.replace(new RegExp(`\\{${arg}\\}`, 'g'), `[${arg}]`);
+  }
+  $('#promptInput').value = prompt;
+  $('#promptInput').focus();
+  closeModals();
+  toast(`Command "${cmd.name}" loaded. Fill in arguments and press Send.`);
+}
+function cancelCmdEditor() {
+  $('#cmdEditor').classList.add('hidden');
+  $('#cmdEditor').innerHTML = '';
+  $('#commandsList')?.classList.remove('hidden');
 }
 
 function renderAgentManager() {

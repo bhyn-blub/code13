@@ -27,6 +27,10 @@ contextBridge.exposeInMainWorld('code13', {
   updateMCPServer: (id, updates) => ipcRenderer.invoke('mcp:update', id, updates),
   removeMCPServer: (id) => ipcRenderer.invoke('mcp:remove', id),
   connectMCPServer: (id) => ipcRenderer.invoke('mcp:connect', id),
+  listCustomCommands: () => ipcRenderer.invoke('command:list'),
+  addCustomCommand: (cmd) => ipcRenderer.invoke('command:add', cmd),
+  updateCustomCommand: (id, updates) => ipcRenderer.invoke('command:update', id, updates),
+  removeCustomCommand: (id) => ipcRenderer.invoke('command:remove', id),
   onEvent: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('code13:event', listener);
